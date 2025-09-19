@@ -1311,7 +1311,6 @@ class S3AssetManager:
         total_bytes = 0
         for asset_root_manifest in manifests:
             if asset_root_manifest.asset_manifest:
-                input_paths = asset_root_manifest.asset_manifest.paths
                 total_files += len(asset_root_manifest.asset_manifest.paths)
                 for path in asset_root_manifest.asset_manifest.paths:
                     total_bytes += path.size
