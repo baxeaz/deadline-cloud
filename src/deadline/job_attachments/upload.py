@@ -559,9 +559,14 @@ class S3AssetUploader:
         ]
         with S3CheckCache(s3_check_cache_dir) as s3_cache:
             cache_entries = [
-                s3_cache.get_entry(s3_key=f"{s3_bucket}/{upload_key}")
+                s3_cache.get_connection_entry(
+                    s3_key=f"{s3_bucket}/{upload_key}", connection=s3_cache.get_local_connection()
+                )
                 for upload_key in s3_upload_keys
-                if s3_cache.get_entry(s3_key=f"{s3_bucket}/{upload_key}") is not None
+                if s3_cache.get_connection_entry(
+                    s3_key=f"{s3_bucket}/{upload_key}", connection=s3_cache.get_local_connection()
+                )
+                is not None
             ]
 
             # verify that a sample of the cached entries still exist in S3
@@ -619,7 +624,9 @@ class S3AssetUploader:
         is_uploaded = False
         file_size = local_path.resolve().stat().st_size
 
-        if s3_check_cache.get_entry(s3_key=f"{s3_bucket}/{s3_upload_key}"):
+        if s3_check_cache.get_connection_entry(
+            s3_key=f"{s3_bucket}/{s3_upload_key}", connection=s3_check_cache.get_local_connection()
+        ):
             logger.debug(
                 f"skipping {local_path} because {s3_bucket}/{s3_upload_key} exists in the cache"
             )
@@ -1035,7 +1042,9 @@ class S3AssetManager:
         file_status: FileStatus = FileStatus.UNCHANGED
         actual_modified_time = str(datetime.fromtimestamp(path.stat().st_mtime))
 
-        entry: Optional[HashCacheEntry] = hash_cache.get_entry(full_path, hash_alg)
+        entry: Optional[HashCacheEntry] = hash_cache.get_connection_entry(
+            full_path, hash_alg, connection=hash_cache.get_local_connection()
+        )
         if entry is not None:
             # If the file was modified, we need to rehash it
             if actual_modified_time != entry.last_modified_time:
