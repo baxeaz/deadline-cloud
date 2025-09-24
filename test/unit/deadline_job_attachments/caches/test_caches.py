@@ -273,32 +273,16 @@ class TestS3CheckCache:
             # Test if the cache file was deleted
             assert not os.path.exists(file_name)
 
-    def test_get_connection_entry_returns_valid_entry(self, tmpdir):
-        """Tests that get_connection_entry returns a valid entry with provided connection"""
-        cache_dir = tmpdir.mkdir("cache")
-        expected_entry = S3CheckCacheEntry(
-            s3_key="bucket/Data/somehash",
-            last_seen_time=str(datetime.now().timestamp()),
-        )
-
-        with S3CheckCache(cache_dir) as s3c:
-            s3c.put_entry(expected_entry)
-            connection = s3c.get_local_connection()
-            actual_entry = s3c.get_connection_entry("bucket/Data/somehash", connection)
-
-            assert actual_entry == expected_entry
-
-    def test_get_connection_entry_returns_none_for_nonexistent_key(self, tmpdir):
-        """Tests that get_connection_entry returns None for non-existent key"""
+    def test_get_entry_returns_none_for_nonexistent_key(self, tmpdir):
+        """Tests that get_entry returns None for non-existent key"""
         cache_dir = tmpdir.mkdir("cache")
 
         with S3CheckCache(cache_dir) as s3c:
-            connection = s3c.get_local_connection()
-            actual_entry = s3c.get_connection_entry("nonexistent/key", connection)
+            actual_entry = s3c.get_entry("nonexistent/key")
 
             assert actual_entry is None
 
-    def test_get_connection_entry_returns_none_for_expired_entry(self, tmpdir):
+    def test_get_entry_returns_none_for_expired_entry(self, tmpdir):
         """Tests that get_connection_entry returns None for expired entries"""
         cache_dir = tmpdir.mkdir("cache")
         expired_entry = S3CheckCacheEntry(
@@ -308,7 +292,6 @@ class TestS3CheckCache:
 
         with S3CheckCache(cache_dir) as s3c:
             s3c.put_entry(expired_entry)
-            connection = s3c.get_local_connection()
-            actual_entry = s3c.get_connection_entry("bucket/Data/somehash", connection)
+            actual_entry = s3c.get_entry("bucket/Data/somehash")
 
             assert actual_entry is None

@@ -59,15 +59,15 @@ class HashCache(CacheDB):
             cache_dir=cache_dir,
         )
 
-    def get_connection_entry(
-        self, file_path_key: str, hash_algorithm: HashAlgorithm, connection
+    def get_entry(
+        self, file_path_key: str, hash_algorithm: HashAlgorithm
     ) -> Optional[HashCacheEntry]:
         """
         Returns an entry from the hash cache, if it exists.
         """
         if not self.enabled:
             return None
-
+        connection = self.get_local_connection()
         entry_vals = connection.execute(
             f"SELECT * FROM {self.table_name} WHERE file_path=? AND hash_algorithm=?",
             [
@@ -85,27 +85,15 @@ class HashCache(CacheDB):
         else:
             return None
 
-    def get_entry(
-        self, file_path_key: str, hash_algorithm: HashAlgorithm
-    ) -> Optional[HashCacheEntry]:
-        """
-        Returns an entry from the hash cache, if it exists.
-        """
-        if not self.enabled:
-            return None
-
-        with self.db_lock, self.db_connection:
-            return self.get_connection_entry(file_path_key, hash_algorithm, self.db_connection)
-
     def put_entry(self, entry: HashCacheEntry) -> None:
         """Inserts or replaces an entry into the hash cache database after acquiring the lock."""
         if self.enabled:
-            with self.db_lock, self.db_connection:
-                entry_dict = entry.to_dict()
-                entry_dict["file_path"] = entry_dict["file_path"].encode(
-                    encoding="utf-8", errors="surrogatepass"
-                )
-                self.db_connection.execute(
-                    f"INSERT OR REPLACE INTO {self.table_name} VALUES(:file_path, :hash_algorithm, :file_hash, :last_modified_time)",
-                    entry_dict,
-                )
+            connection = self.get_local_connection()
+            entry_dict = entry.to_dict()
+            entry_dict["file_path"] = entry_dict["file_path"].encode(
+                encoding="utf-8", errors="surrogatepass"
+            )
+            connection.execute(
+                f"INSERT OR REPLACE INTO {self.table_name} VALUES(:file_path, :hash_algorithm, :file_hash, :last_modified_time)",
+                entry_dict,
+            )

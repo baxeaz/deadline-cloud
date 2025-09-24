@@ -56,11 +56,12 @@ class S3CheckCache(CacheDB):
             cache_dir=cache_dir,
         )
 
-    def get_connection_entry(self, s3_key: str, connection) -> Optional[S3CheckCacheEntry]:
+    def get_entry(self, s3_key: str) -> Optional[S3CheckCacheEntry]:
         """
         Checks if an entry exists in the cache, and returns it if it hasn't expired.
         """
 
+        connection = self.get_local_connection()
         entry_vals = connection.execute(
             f"SELECT * FROM {self.table_name} WHERE s3_key=?",
             [s3_key],
@@ -79,21 +80,11 @@ class S3CheckCache(CacheDB):
 
         return None
 
-    def get_entry(self, s3_key: str) -> Optional[S3CheckCacheEntry]:
-        """
-        Checks if an entry exists in the cache, and returns it if it hasn't expired.
-        """
-        if not self.enabled:
-            return None
-
-        with self.db_lock, self.db_connection:
-            return self.get_connection_entry(s3_key, self.db_connection)
-
     def put_entry(self, entry: S3CheckCacheEntry) -> None:
         """Inserts or replaces an entry into the cache database."""
         if self.enabled:
-            with self.db_lock, self.db_connection:
-                self.db_connection.execute(
-                    f"INSERT OR REPLACE INTO {self.table_name} VALUES(:s3_key, :last_seen_time)",
-                    entry.to_dict(),
-                )
+            connection = self.get_local_connection()
+            connection.execute(
+                f"INSERT OR REPLACE INTO {self.table_name} VALUES(:s3_key, :last_seen_time)",
+                entry.to_dict(),
+            )

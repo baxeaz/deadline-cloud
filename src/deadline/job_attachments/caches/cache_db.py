@@ -56,7 +56,6 @@ class CacheDB(ABC):
             )
         os.makedirs(cache_dir, exist_ok=True)
         self.cache_dir: str = os.path.join(cache_dir, f"{self.cache_name}.db")
-        self.db_lock = Lock()
 
     def __enter__(self):
         """Called when entering the context manager."""
@@ -64,22 +63,20 @@ class CacheDB(ABC):
             import sqlite3
 
             try:
-                self.db_connection: sqlite3.Connection = sqlite3.connect(
-                    self.cache_dir, check_same_thread=False
-                )
+                local_connection: sqlite3.Connection = self.get_local_connection()
             except sqlite3.OperationalError as oe:
                 raise JobAttachmentsError(
                     f"Could not access cache file in {self.cache_dir}"
                 ) from oe
 
             try:
-                self.db_connection.execute(f"SELECT * FROM {self.table_name}")
+                local_connection.execute(f"SELECT * FROM {self.table_name}")
             except Exception:
                 # DB file doesn't have our table, so we need to create it
                 logger.info(
                     f"No cache entries for the current library version were found. Creating a new cache for {self.cache_name}"
                 )
-                self.db_connection.execute(self.create_query)
+                local_connection.execute(self.create_query)
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
@@ -88,7 +85,6 @@ class CacheDB(ABC):
         if self.enabled:
             import sqlite3
 
-            self.db_connection.close()
             for conn in self.local_connections:
                 try:
                     conn.close()
@@ -133,7 +129,6 @@ class CacheDB(ABC):
         if self.enabled:
             import sqlite3
 
-            self.db_connection.close()
             conn_list = list(self.local_connections)
             for conn in conn_list:
                 try:
