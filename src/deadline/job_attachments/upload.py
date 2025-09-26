@@ -254,15 +254,32 @@ class S3AssetUploader:
                 extra_args=manifest_metadata,
             )
 
+        # Report initial progress
+        progress_tracker.on_progress_callback(
+            ProgressReportMetadata(
+                status=ProgressStatus.PREPARING_IN_PROGRESS,
+                progress=0.0,
+                transferRate=0.0,
+                progressMessage="Verifying hash cache integrity...",
+            )
+        )        
         # Verify S3 hash cache integrity, and reset cache if cached files are missing
         if not self.verify_hash_cache_integrity(
             s3_check_cache_dir,
             manifest,
             job_attachment_settings.full_cas_prefix(),
             job_attachment_settings.s3BucketName,
+            progress_tracker
         ):
             self.reset_s3_check_cache(s3_check_cache_dir)
-
+        progress_tracker.on_progress_callback(
+            ProgressReportMetadata(
+                status=ProgressStatus.PREPARING_IN_PROGRESS,
+                progress=100.0,
+                transferRate=0.0,
+                progressMessage="Verifying hash cache integrity...",
+            )
+        )     
         # Upload assets
         self.upload_input_files(
             manifest=manifest,
@@ -549,7 +566,7 @@ class S3AssetUploader:
             # Remove the cache file
             s3_check_cache.remove_cache()
 
-    def _check_hashes_exist_in_s3(self, cache_entries: List[S3CheckCacheEntry]) -> bool:
+    def _check_hashes_exist_in_s3(self, cache_entries: List[S3CheckCacheEntry], progress_tracker : Optional[ProgressTracker] = None,) -> bool:
         """
         checks if the hashes in the cache entries exist in S3
         """
@@ -579,6 +596,7 @@ class S3AssetUploader:
         manifest: BaseAssetManifest,
         s3_cas_prefix: str,
         s3_bucket: str,
+        progress_tracker: Optional[ProgressTracker] = None,
     ) -> bool:
         """
         Inspects a sampling of the assets provided in manifest that are present in the S3 check cache and
@@ -1201,13 +1219,25 @@ class S3AssetManager:
                     status=ProgressStatus.PREPARING_IN_PROGRESS,
                     progress=0.0,
                     transferRate=0.0,
-                    progressMessage="discovering assets",
+                    progressMessage="Collecting Input Paths...",
                 )
             )
 
         # Resolve full path, then cast to pure path to get top-level directory
         for _path in input_paths:
+            processed_paths += 1
+            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
+                progress = (processed_paths / total_paths) * 100.0
+                on_preparing_to_submit(
+                    ProgressReportMetadata(
+                        status=ProgressStatus.PREPARING_IN_PROGRESS,
+                        progress=progress,
+                        transferRate=0.0,
+                        progressMessage=f"Collecting Input Paths... ({processed_paths} / {total_paths})",
+                    )
+                )
             # Need to use absolute to not resolve symlinks, but need normpath to get rid of relative paths, i.e. '..'
+            # Update progress
             abs_path = Path(os.path.normpath(Path(_path).absolute()))
             if not self._stat_cache.exists(abs_path):
                 if require_paths_exist:
@@ -1237,18 +1267,6 @@ class S3AssetManager:
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.inputs.add(abs_path)
             
-            # Update progress
-            processed_paths += 1
-            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
-                progress = (processed_paths / total_paths) * 100.0
-                on_preparing_to_submit(
-                    ProgressReportMetadata(
-                        status=ProgressStatus.PREPARING_IN_PROGRESS,
-                        progress=progress,
-                        transferRate=0.0,
-                        progressMessage="discovering assets",
-                    )
-                )
 
         if missing_input_paths or misconfigured_directories:
             all_misconfigured_inputs = ""
@@ -1288,19 +1306,6 @@ class S3AssetManager:
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.outputs.add(abs_path)
             
-            # Update progress
-            processed_paths += 1
-            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
-                progress = (processed_paths / total_paths) * 100.0
-                on_preparing_to_submit(
-                    ProgressReportMetadata(
-                        status=ProgressStatus.PREPARING_IN_PROGRESS,
-                        progress=progress,
-                        transferRate=0.0,
-                        progressMessage="discovering assets",
-                    )
-                )
-
         for _path in referenced_paths:
             abs_path = Path(os.path.normpath(Path(_path).absolute()))
 
@@ -1318,19 +1323,6 @@ class S3AssetManager:
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.references.add(abs_path)
             
-            # Update progress
-            processed_paths += 1
-            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
-                progress = (processed_paths / total_paths) * 100.0
-                on_preparing_to_submit(
-                    ProgressReportMetadata(
-                        status=ProgressStatus.PREPARING_IN_PROGRESS,
-                        progress=progress,
-                        transferRate=0.0,
-                        progressMessage="discovering assets",
-                    )
-                )
-
         # Finally, build the list of asset root groups
         for asset_group in groupings.values():
             common_path: Path = Path(
@@ -1349,7 +1341,7 @@ class S3AssetManager:
                     status=ProgressStatus.PREPARING_IN_PROGRESS,
                     progress=100.0,
                     transferRate=0.0,
-                    progressMessage="discovering assets",
+                    progressMessage=f"Collecting Input Paths... ({total_paths} / {total_paths})",
                 )
             )
 
