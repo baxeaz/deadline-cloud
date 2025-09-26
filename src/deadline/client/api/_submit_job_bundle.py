@@ -663,6 +663,7 @@ def create_job_from_job_bundle(
             referenced_paths=sorted(asset_references.referenced_paths),
             storage_profile=storage_profile,
             require_paths_exist=require_paths_exist,
+            on_preparing_to_submit=hashing_progress_callback,
         )
 
         if upload_group.asset_groups:

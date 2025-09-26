@@ -604,6 +604,7 @@ def test_create_job_from_job_bundle_empty_job_attachments(
             referenced_paths=[],
             storage_profile=MOCK_STORAGE_PROFILE,
             require_paths_exist=False,
+            on_preparing_to_submit=fake_hashing_callback,
         )
         mock.hash_attachments.assert_not_called()
         mock.upload_assets.assert_not_called()

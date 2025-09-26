@@ -72,6 +72,7 @@ from .models import (
     S3_MANIFEST_FOLDER_NAME,
 )
 from .progress_tracker import (
+    ProgressReportMetadata,
     ProgressStatus,
     ProgressTracker,
     SummaryStatistics,
@@ -1164,6 +1165,7 @@ class S3AssetManager:
         local_type_locations: dict[str, str] = {},
         shared_type_locations: dict[str, str] = {},
         require_paths_exist: bool = False,
+        on_preparing_to_submit: Optional[Callable[[Any], bool]] = None,
     ) -> list[AssetRootGroup]:
         """
         For the given input paths and output paths, a list of groups is returned, where paths sharing
@@ -1181,6 +1183,27 @@ class S3AssetManager:
         groupings: dict[str, AssetRootGroup] = {}
         missing_input_paths = set()
         misconfigured_directories = set()
+
+        # Set up progress tracking
+        total_paths = len(input_paths) + len(output_paths) + len(referenced_paths)
+        processed_paths = 0
+        
+        def _default_progress_callback(progress_metadata: ProgressReportMetadata) -> bool:
+            return True
+        
+        if not on_preparing_to_submit:
+            on_preparing_to_submit = _default_progress_callback
+
+        # Report initial progress
+        if total_paths > 0:
+            on_preparing_to_submit(
+                ProgressReportMetadata(
+                    status=ProgressStatus.PREPARING_IN_PROGRESS,
+                    progress=0.0,
+                    transferRate=0.0,
+                    progressMessage="discovering assets",
+                )
+            )
 
         # Resolve full path, then cast to pure path to get top-level directory
         for _path in input_paths:
@@ -1213,6 +1236,19 @@ class S3AssetManager:
             )
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.inputs.add(abs_path)
+            
+            # Update progress
+            processed_paths += 1
+            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
+                progress = (processed_paths / total_paths) * 100.0
+                on_preparing_to_submit(
+                    ProgressReportMetadata(
+                        status=ProgressStatus.PREPARING_IN_PROGRESS,
+                        progress=progress,
+                        transferRate=0.0,
+                        progressMessage="discovering assets",
+                    )
+                )
 
         if missing_input_paths or misconfigured_directories:
             all_misconfigured_inputs = ""
@@ -1251,6 +1287,19 @@ class S3AssetManager:
             )
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.outputs.add(abs_path)
+            
+            # Update progress
+            processed_paths += 1
+            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
+                progress = (processed_paths / total_paths) * 100.0
+                on_preparing_to_submit(
+                    ProgressReportMetadata(
+                        status=ProgressStatus.PREPARING_IN_PROGRESS,
+                        progress=progress,
+                        transferRate=0.0,
+                        progressMessage="discovering assets",
+                    )
+                )
 
         for _path in referenced_paths:
             abs_path = Path(os.path.normpath(Path(_path).absolute()))
@@ -1268,6 +1317,19 @@ class S3AssetManager:
             )
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.references.add(abs_path)
+            
+            # Update progress
+            processed_paths += 1
+            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
+                progress = (processed_paths / total_paths) * 100.0
+                on_preparing_to_submit(
+                    ProgressReportMetadata(
+                        status=ProgressStatus.PREPARING_IN_PROGRESS,
+                        progress=progress,
+                        transferRate=0.0,
+                        progressMessage="discovering assets",
+                    )
+                )
 
         # Finally, build the list of asset root groups
         for asset_group in groupings.values():
@@ -1279,6 +1341,17 @@ class S3AssetManager:
             if common_path.is_file():
                 common_path = common_path.parent
             asset_group.root_path = str(common_path)
+
+        # Report completion
+        if total_paths > 0:
+            on_preparing_to_submit(
+                ProgressReportMetadata(
+                    status=ProgressStatus.PREPARING_IN_PROGRESS,
+                    progress=100.0,
+                    transferRate=0.0,
+                    progressMessage="discovering assets",
+                )
+            )
 
         return sorted(groupings.values(), key=lambda v: (v.root_path, v.file_system_location_name))
 
@@ -1393,6 +1466,7 @@ class S3AssetManager:
         referenced_paths: list[str],
         storage_profile: Optional[StorageProfile],
         require_paths_exist: bool,
+        on_preparing_to_submit: Optional[Callable[[Any], bool]] = None,
     ) -> list[AssetRootGroup]:
         """
         Resolves all of the paths that will be uploaded, sorting by storage profile location.
@@ -1413,6 +1487,7 @@ class S3AssetManager:
             local_type_locations,
             shared_type_locations,
             require_paths_exist,
+            on_preparing_to_submit,
         )
 
         return asset_groups
@@ -1424,11 +1499,15 @@ class S3AssetManager:
         referenced_paths: list[str],
         storage_profile: Optional[StorageProfile] = None,
         require_paths_exist: bool = False,
+        on_preparing_to_submit: Optional[Callable[[Any], bool]] = None,
     ) -> AssetUploadGroup:
         """
         Processes all of the paths required for upload, grouping them by asset root and local storage profile locations.
         Returns an object containing the grouped paths, which also includes a dictionary of input directories and file counts
         for files that were not under the root path or any local storage profile locations.
+        
+        Args:
+            on_preparing_to_submit: Optional callback to report progress during path discovery.
         """
         asset_groups = self._group_asset_paths(
             input_paths,
@@ -1436,6 +1515,7 @@ class S3AssetManager:
             referenced_paths,
             storage_profile,
             require_paths_exist,
+            on_preparing_to_submit,
         )
         (input_file_count, input_bytes) = self._get_total_input_size_from_asset_group(asset_groups)
         return AssetUploadGroup(
