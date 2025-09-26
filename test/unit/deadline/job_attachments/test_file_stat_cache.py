@@ -4,13 +4,13 @@ import stat
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from deadline.job_attachments.upload import FileStatCache
+from deadline.job_attachments.upload import _FileStatCache
 
 
 class TestFileStatCache:
     def test_get_stat_caches_result(self, tmp_path):
         """Test that stat results are cached and not called multiple times"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         test_file = tmp_path / "test.txt"
         test_file.write_text("test")
 
@@ -18,28 +18,28 @@ class TestFileStatCache:
             mock_stat.return_value = MagicMock()
 
             # First call should invoke stat
-            result1 = cache.get_stat(test_file)
+            result1 = cache._get_stat(test_file)
             assert mock_stat.call_count == 1
 
             # Second call should use cache
-            result2 = cache.get_stat(test_file)
+            result2 = cache._get_stat(test_file)
             assert mock_stat.call_count == 1
             assert result1 is result2
 
     def test_get_stat_handles_missing_file(self, tmp_path):
         """Test that missing files return None and are cached"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         missing_file = tmp_path / "missing.txt"
 
-        result1 = cache.get_stat(missing_file)
-        result2 = cache.get_stat(missing_file)
+        result1 = cache._get_stat(missing_file)
+        result2 = cache._get_stat(missing_file)
 
         assert result1 is None
         assert result2 is None
 
     def test_exists_with_existing_file(self, tmp_path):
         """Test exists() returns True for existing files"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         test_file = tmp_path / "test.txt"
         test_file.write_text("test")
 
@@ -47,14 +47,14 @@ class TestFileStatCache:
 
     def test_exists_with_missing_file(self, tmp_path):
         """Test exists() returns False for missing files"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         missing_file = tmp_path / "missing.txt"
 
         assert cache.exists(missing_file) is False
 
     def test_is_dir_with_directory(self, tmp_path):
         """Test is_dir() returns True for directories"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         test_dir = tmp_path / "testdir"
         test_dir.mkdir()
 
@@ -62,7 +62,7 @@ class TestFileStatCache:
 
     def test_is_dir_with_file(self, tmp_path):
         """Test is_dir() returns False for files"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         test_file = tmp_path / "test.txt"
         test_file.write_text("test")
 
@@ -70,14 +70,14 @@ class TestFileStatCache:
 
     def test_is_dir_with_missing_path(self, tmp_path):
         """Test is_dir() returns False for missing paths"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         missing_path = tmp_path / "missing"
 
         assert cache.is_dir(missing_path) is False
 
     def test_get_size_with_file(self, tmp_path):
         """Test get_size() returns correct file size"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         test_file = tmp_path / "test.txt"
         content = "test content"
         test_file.write_text(content)
@@ -87,14 +87,14 @@ class TestFileStatCache:
 
     def test_get_size_with_missing_file(self, tmp_path):
         """Test get_size() returns 0 for missing files"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         missing_file = tmp_path / "missing.txt"
 
         assert cache.get_size(missing_file) == 0
 
     def test_cache_reuse_across_methods(self, tmp_path):
         """Test that cache is shared across different methods"""
-        cache = FileStatCache()
+        cache = _FileStatCache()
         test_file = tmp_path / "test.txt"
         test_file.write_text("test")
 

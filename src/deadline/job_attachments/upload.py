@@ -16,6 +16,7 @@ import stat
 import sys
 import time
 from datetime import datetime
+from functools import lru_cache
 from io import BufferedReader, BytesIO
 from math import trunc
 from pathlib import Path, PurePath
@@ -84,26 +85,20 @@ from ._utils import (
 logger = logging.getLogger("deadline.job_attachments.upload")
 
 
-class FileStatCache:
-    """Cache file stat results to avoid redundant filesystem calls"""
+class _FileStatCache:
+    """Private cache for file stat results to avoid redundant filesystem calls"""
 
-    def __init__(self):
-        self._cache = {}
-
-    def get_stat(self, path: Path) -> Optional[os.stat_result]:
-        """Get cached stat result or perform stat and cache it"""
-        path_str = str(path)
-        if path_str not in self._cache:
-            try:
-                self._cache[path_str] = path.stat()
-            except (FileNotFoundError, PermissionError, OSError):
-                self._cache[path_str] = None
-        return self._cache[path_str]
+    @lru_cache(maxsize=1024)
+    def _get_stat(self, path_str: str) -> Optional[os.stat_result]:
+        """Get cached stat result for a path string"""
+        try:
+            return Path(path_str).stat()
+        except (FileNotFoundError, PermissionError, OSError):
+            return None
 
     def exists(self, path: Path) -> bool:
         """Check if path exists, using cache when possible"""
-        # Try cached stat result first
-        stat_result = self.get_stat(path)
+        stat_result = self._get_stat(str(path))
         if stat_result is not None:
             return True
         # Fall back to direct exists() call if stat failed
@@ -111,7 +106,7 @@ class FileStatCache:
 
     def is_dir(self, path: Path) -> bool:
         """Check if path is directory, using cache when possible"""
-        stat_result = self.get_stat(path)
+        stat_result = self._get_stat(str(path))
         if stat_result is not None:
             return stat.S_ISDIR(stat_result.st_mode)
         # Fall back to direct is_dir() call if stat failed
@@ -119,7 +114,7 @@ class FileStatCache:
 
     def get_size(self, path: Path) -> int:
         """Get file size using cached stat"""
-        stat_result = self.get_stat(path)
+        stat_result = self._get_stat(str(path))
         if stat_result is not None:
             return stat_result.st_size
         # Log warning for missing files and return 0
@@ -1053,7 +1048,7 @@ class S3AssetManager:
         self.session = session
 
         self.manifest_version: ManifestVersion = asset_manifest_version
-        self._stat_cache = FileStatCache()
+        self._stat_cache = _FileStatCache()
 
     def _process_input_path(
         self,
