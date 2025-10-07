@@ -1406,11 +1406,7 @@ class S3AssetManager:
 
     def _get_total_size_of_files(self, paths: list[str]) -> int:
         def get_file_size(path_str: str) -> int:
-            try:
-                return self._stat_cache.get_size(Path(path_str))
-            except (FileNotFoundError, PermissionError, OSError):
-                logger.warning(f"Skipping file in size calculation: {path_str}")
-                return 0
+            return self._stat_cache.get_size(Path(path_str))
 
         # Use threading for I/O operations
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:

@@ -85,12 +85,13 @@ class TestFileStatCache:
         size = cache.get_size(test_file)
         assert size == len(content.encode())
 
-    def test_get_size_with_missing_file(self, tmp_path):
-        """Test get_size() returns 0 for missing files"""
+    def test_get_size_with_missing_file(self, tmp_path, caplog):
+        """Test get_size() returns 0 for missing files and emits the expected message"""
         cache = _FileStatCache()
         missing_file = tmp_path / "missing.txt"
 
         assert cache.get_size(missing_file) == 0
+        assert "Skipping file in size calculation" in caplog.text
 
     def test_cache_reuse_across_methods(self, tmp_path):
         """Test that cache is shared across different methods"""
