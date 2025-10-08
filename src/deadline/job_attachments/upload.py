@@ -255,31 +255,25 @@ class S3AssetUploader:
             )
 
         # Report initial progress
-        progress_tracker.on_progress_callback(
-            ProgressReportMetadata(
-                status=ProgressStatus.PREPARING_IN_PROGRESS,
-                progress=0.0,
-                transferRate=0.0,
-                progressMessage="Verifying hash cache integrity...",
+        if progress_tracker:
+            progress_tracker.on_progress_callback(
+                ProgressReportMetadata(
+                    status=ProgressStatus.VERIFYING_IN_PROGRESS,
+                    progress=0.0,
+                    transferRate=0.0,
+                    progressMessage="Verifying hash cache integrity...",
+                )
             )
-        )        
         # Verify S3 hash cache integrity, and reset cache if cached files are missing
         if not self.verify_hash_cache_integrity(
             s3_check_cache_dir,
             manifest,
             job_attachment_settings.full_cas_prefix(),
             job_attachment_settings.s3BucketName,
-            progress_tracker
+            progress_tracker,
         ):
             self.reset_s3_check_cache(s3_check_cache_dir)
-        progress_tracker.on_progress_callback(
-            ProgressReportMetadata(
-                status=ProgressStatus.PREPARING_IN_PROGRESS,
-                progress=100.0,
-                transferRate=0.0,
-                progressMessage="Verifying hash cache integrity...",
-            )
-        )     
+
         # Upload assets
         self.upload_input_files(
             manifest=manifest,
@@ -566,10 +560,16 @@ class S3AssetUploader:
             # Remove the cache file
             s3_check_cache.remove_cache()
 
-    def _check_hashes_exist_in_s3(self, cache_entries: List[S3CheckCacheEntry], progress_tracker : Optional[ProgressTracker] = None,) -> bool:
+    def _check_hashes_exist_in_s3(
+        self,
+        cache_entries: List[S3CheckCacheEntry],
+        progress_tracker: Optional[ProgressTracker] = None,
+    ) -> bool:
         """
         checks if the hashes in the cache entries exist in S3
         """
+        count = 0
+        num_entries = len(cache_entries)
         for cache_entry in cache_entries:
             try:
                 # Split the S3 key into bucket and key parts
@@ -578,7 +578,16 @@ class S3AssetUploader:
                 # Check if the object is already uploaded and exist in S3 bucket
                 if self.file_already_uploaded(bucket=bucket, key=key):
                     logger.debug(f"cache_entry: {cache_entry} exist in S3")
-
+                    count += 1
+                    if progress_tracker:
+                        progress_tracker.on_progress_callback(
+                            ProgressReportMetadata(
+                                status=ProgressStatus.VERIFYING_IN_PROGRESS,
+                                progress=(count / num_entries * 100.0),
+                                transferRate=0.0,
+                                progressMessage="Verifying hash cache integrity...",
+                            )
+                        )
                 # If a mismatch found, return False to reset the cache immediately. There's no need to check the rest.
                 else:
                     return False
@@ -621,7 +630,7 @@ class S3AssetUploader:
                     sampled_cache_entries.append(this_entry)
                     if len(sampled_cache_entries) >= 30:
                         break
-        return self._check_hashes_exist_in_s3(sampled_cache_entries)
+        return self._check_hashes_exist_in_s3(sampled_cache_entries, progress_tracker)
 
     def _separate_files_by_size(
         self,
@@ -1205,10 +1214,10 @@ class S3AssetManager:
         # Set up progress tracking
         total_paths = len(input_paths) + len(output_paths) + len(referenced_paths)
         processed_paths = 0
-        
+
         def _default_progress_callback(progress_metadata: ProgressReportMetadata) -> bool:
             return True
-        
+
         if not on_preparing_to_submit:
             on_preparing_to_submit = _default_progress_callback
 
@@ -1216,7 +1225,7 @@ class S3AssetManager:
         if total_paths > 0:
             on_preparing_to_submit(
                 ProgressReportMetadata(
-                    status=ProgressStatus.PREPARING_IN_PROGRESS,
+                    status=ProgressStatus.COLLECTING_IN_PROGRESS,
                     progress=0.0,
                     transferRate=0.0,
                     progressMessage="Collecting Input Paths...",
@@ -1226,11 +1235,13 @@ class S3AssetManager:
         # Resolve full path, then cast to pure path to get top-level directory
         for _path in input_paths:
             processed_paths += 1
-            if total_paths > 0 and processed_paths % 10 == 0:  # Report every 10 paths to avoid too frequent updates
+            if (
+                total_paths > 0 and processed_paths % 10 == 0
+            ):  # Report every 10 paths to avoid too frequent updates
                 progress = (processed_paths / total_paths) * 100.0
                 on_preparing_to_submit(
                     ProgressReportMetadata(
-                        status=ProgressStatus.PREPARING_IN_PROGRESS,
+                        status=ProgressStatus.COLLECTING_IN_PROGRESS,
                         progress=progress,
                         transferRate=0.0,
                         progressMessage=f"Collecting Input Paths... ({processed_paths} / {total_paths})",
@@ -1266,7 +1277,6 @@ class S3AssetManager:
             )
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.inputs.add(abs_path)
-            
 
         if missing_input_paths or misconfigured_directories:
             all_misconfigured_inputs = ""
@@ -1305,7 +1315,7 @@ class S3AssetManager:
             )
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.outputs.add(abs_path)
-            
+
         for _path in referenced_paths:
             abs_path = Path(os.path.normpath(Path(_path).absolute()))
 
@@ -1322,7 +1332,7 @@ class S3AssetManager:
             )
             matched_group = self._get_matched_group(matched_root, groupings)
             matched_group.references.add(abs_path)
-            
+
         # Finally, build the list of asset root groups
         for asset_group in groupings.values():
             common_path: Path = Path(
@@ -1338,7 +1348,7 @@ class S3AssetManager:
         if total_paths > 0:
             on_preparing_to_submit(
                 ProgressReportMetadata(
-                    status=ProgressStatus.PREPARING_IN_PROGRESS,
+                    status=ProgressStatus.COLLECTING_IN_PROGRESS,
                     progress=100.0,
                     transferRate=0.0,
                     progressMessage=f"Collecting Input Paths... ({total_paths} / {total_paths})",
@@ -1493,7 +1503,7 @@ class S3AssetManager:
         Processes all of the paths required for upload, grouping them by asset root and local storage profile locations.
         Returns an object containing the grouped paths, which also includes a dictionary of input directories and file counts
         for files that were not under the root path or any local storage profile locations.
-        
+
         Args:
             on_preparing_to_submit: Optional callback to report progress during path discovery.
         """

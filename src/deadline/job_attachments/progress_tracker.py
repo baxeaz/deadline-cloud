@@ -111,8 +111,14 @@ class ProgressStatus(Enum):
     NONE = ("NONE", "")
     """The asset manager is not assigned any work."""
 
+    COLLECTING_IN_PROGRESS = ("COLLECTING_IN_PROGRESS", "Collecting")
+    """The asset manager is collecting input dependencies."""
+
     PREPARING_IN_PROGRESS = ("PREPARING_IN_PROGRESS", "Processed")
     """The asset manager is hashing files."""
+
+    VERIFYING_IN_PROGRESS = ("VERIFYING_IN_PROGRESS", "Verifying")
+    """The asset manager is verifying the integrity of the s3 cache."""
 
     UPLOAD_IN_PROGRESS = ("UPLOAD_IN_PROGRESS", "Uploaded")
     """The asset manager is uploading files."""
