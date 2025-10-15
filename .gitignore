@@ -13,8 +13,9 @@ __pycache__/
 .DS_Store
 
 # Build artifacts
-/build
-/dist
+/build/
+/dist/
+/site/
 installer/components
 
 # Misc extensions
@@ -30,3 +31,4 @@ installer/components
 
 # Install builder license
 license.xml
+/THIRD_PARTY_LICENSES
