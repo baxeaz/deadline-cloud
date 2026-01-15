@@ -1,8 +1,52 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 from contextlib import contextmanager
-from typing import Any
+from functools import lru_cache
+from typing import Any, Dict, TYPE_CHECKING
+import json
+import locale as locale_module
+from pathlib import Path
 
 from ..exceptions import DeadlineOperationError
+from ..config import config_file
+
+# Import TranslationKey type only during type checking to avoid runtime errors
+# if _translation_keys.py doesn't exist (it's generated during build)
+if TYPE_CHECKING:
+    from ._translation_keys import TranslationKey
+else:
+    TranslationKey = str
+
+_LD_LIBRARY_PATH = "LD_LIBRARY_PATH"
+_LD_LIBRARY_PATH_ORIG = "LD_LIBRARY_PATH_ORIG"
+
+
+@lru_cache(maxsize=1)
+def _get_translations() -> Dict[str, str]:
+    """Load UI translations from locale-specific JSON."""
+
+    # Check config setting first, then fall back to system locale
+    current_locale = config_file.get_setting("settings.locale")
+    if not current_locale:
+        current_locale, _ = locale_module.getdefaultlocale()
+    if not current_locale:
+        current_locale = "en_US"
+
+    # Try locale-specific file, fallback to en_US
+    translations_dir = Path(__file__).parent / "translations" / "locales"
+    locale_file = translations_dir / f"{current_locale}.json"
+    if not locale_file.exists():
+        locale_file = translations_dir / "en_US.json"
+
+    try:
+        with open(locale_file) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def tr(text: TranslationKey) -> str:
+    """Translate text using JSON translations."""
+    return _get_translations().get(text, text)
 
 
 @contextmanager
@@ -116,7 +160,16 @@ def gui_context_for_cli(automatically_install_dependencies: bool):
             ]
             python_executable = shutil.which("python3") or shutil.which("python")
             if python_executable:
-                subprocess.run([python_executable] + pip_command)
+                # https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html#linux-and-unix-like-oses
+                env = os.environ.copy()
+                if os.name != "nt":
+                    if env.get(_LD_LIBRARY_PATH_ORIG) is not None:
+                        env[_LD_LIBRARY_PATH] = env[_LD_LIBRARY_PATH_ORIG]
+                    else:
+                        # This happens when LD_LIBRARY_PATH was not set.
+                        env.pop(_LD_LIBRARY_PATH, None)
+
+                subprocess.run([python_executable] + pip_command, env=env)
             else:
                 click.echo(
                     "Unable to install GUI dependencies, if you have python available you can install it by running:"

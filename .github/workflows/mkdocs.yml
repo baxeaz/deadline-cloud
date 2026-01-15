@@ -6,6 +6,7 @@ on:
       - mainline
     paths:
       - 'docs/**'
+      - 'src/**'
       - 'mkdocs.yml'
       - '.github/workflows/mkdocs.yml'
   workflow_dispatch:
@@ -18,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6

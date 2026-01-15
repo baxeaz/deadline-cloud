@@ -1,3 +1,4 @@
+# coding: utf-8
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 from __future__ import annotations
 import copy
@@ -6,6 +7,7 @@ from logging import getLogger
 from typing import Any, Optional, Dict
 
 from qtpy.QtCore import Qt  # pylint: disable=import-error
+from ._utils import tr
 from qtpy.QtWidgets import (  # pylint: disable=import-error; type: ignore
     QApplication,
     QFileDialog,
@@ -30,6 +32,7 @@ from ..job_bundle.parameters import (
     validate_job_parameter_value,
 )
 from .dataclasses import JobBundleSettings
+from ..dataclasses import SubmitterInfo
 from .dialogs.submit_job_to_deadline_dialog import (
     SubmitJobToDeadlineDialog,
     JobBundlePurpose,
@@ -93,18 +96,16 @@ def _validate_and_warn_about_parameters(
     if not unrecognized_names:
         return True
 
-    # Display warning dialog for unrecognized parameters
-    unrecognized_list = "\n".join(f"  • {name}" for name in unrecognized_names)
-    message = (
-        f"The following parameters are not recognized by the job template or queue:\n\n"
-        f"{unrecognized_list}\n\n"
-        f"These parameters will be ignored during job submission.\n\n"
-        f"Do you want to continue?"
-    )
+    unrecognized_list = "\n".join(f"  \u2022 {name}" for name in unrecognized_names)
+    message = tr(
+        "The following parameters are not recognized by the job template or queue:\n\n{params}\n\n"
+        "These parameters will be ignored during job submission.\n\n"
+        "Do you want to continue?"
+    ).format(params=unrecognized_list)
 
     reply = QMessageBox.question(
         parent_widget,
-        "Unrecognized Parameters",
+        tr("Unrecognized Parameters"),
         message,
         QMessageBox.Yes | QMessageBox.No,
         QMessageBox.No,
@@ -119,7 +120,7 @@ def show_job_bundle_submitter(
     browse: bool = False,
     parent: Optional[QWidget] = None,
     f=Qt.WindowFlags(),
-    submitter_name: Optional[str] = None,
+    submitter_info: Optional[SubmitterInfo] = None,
     known_asset_paths: Optional[list[str]] = None,
     job_parameters: Optional[list[dict[str, Any]]] = None,
 ) -> Optional[SubmitJobToDeadlineDialog]:
@@ -128,12 +129,23 @@ def show_job_bundle_submitter(
 
     Pass f=Qt.Tool if running it within an application context and want it
     to stay on top.
+
+    Args:
+        input_job_bundle_dir: Path to the job bundle directory
+        browse: Whether to show a file browser dialog
+        parent: Parent widget
+        f: Qt window flags
+        submitter_info: Optional submitter information to display in About dialog.
+        known_asset_paths: List of known asset paths
+
+    Returns:
+        The created SubmitJobToDeadlineDialog instance, or None if cancelled
     """
 
-    if not submitter_name:
-        submitter_name = "JobBundle"
+    if not submitter_info:
+        submitter_info = SubmitterInfo(submitter_name="JobBundle")
 
-    session_context["submitter-name"] = submitter_name
+    session_context["submitter-name"] = submitter_info.submitter_name
 
     if parent is None:
         # Get the main application window so we can parent ours to it
@@ -148,7 +160,7 @@ def show_job_bundle_submitter(
 
     if not input_job_bundle_dir:
         input_job_bundle_dir = QFileDialog.getExistingDirectory(
-            parent, "Choose job bundle directory", input_job_bundle_dir
+            parent, tr("Choose job bundle directory"), input_job_bundle_dir
         )
         if not input_job_bundle_dir:
             return None
@@ -292,7 +304,7 @@ def show_job_bundle_submitter(
         on_create_job_bundle_callback=on_create_job_bundle_callback,
         parent=parent,
         f=f,
-        submitter_name=submitter_name,
+        submitter_info=submitter_info,
         known_asset_paths=known_asset_paths,
     )
 

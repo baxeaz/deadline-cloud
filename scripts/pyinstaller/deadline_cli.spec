@@ -10,8 +10,8 @@ import deadline.client
 b_module_path = os.path.dirname(os.path.dirname(deadline.client.__file__))
 
 ROOT = Path(b_module_path).absolute().parents[1]
-EXE_NAME = 'deadline_cli'
-OUTPUT_DIR = 'deadline_cli'
+EXE_NAME = 'deadline'
+OUTPUT_DIR = 'deadline'
 BLOCK_CIPHER = None
 
 datas, binaries, hiddenimports = collect_all('deadline')
@@ -66,10 +66,8 @@ if sys.platform == "win32":
     
     cli_a.binaries += [('python3.dll', python3_dll, 'BINARY')]
 
-# Filter out the UI submodule for now
-deadline_ui = os.path.join('deadline', 'ui')
-cli_a.datas = [item for item in cli_a.datas if not item[0].startswith(deadline_ui)]
 
+cli_a.datas = [item for item in cli_a.datas if not item[0].startswith("Python.framework")]
 cli_a.exclude_system_libraries(list_of_exceptions=['libssl*', 'libsqlite3*', 'libcrypto*'])
 
 cli_pyz = PYZ(cli_a.pure, cli_a.zipped_data, cipher=BLOCK_CIPHER)

@@ -1,3 +1,59 @@
+## 0.54.0 (2025-12-11)
+
+### DEPRECATIONS
+* The CLI `bundle gui-submit --submitter-name` option has been deprecated. `--submitter-info` should now be used to provide the name.
+
+### BREAKING CHANGES
+
+* add translations for multiple languages (#916) ([`a2e8b82`](https://github.com/aws-deadline/deadline-cloud/commit/a2e8b8229921e166cfb215c273a96fbb7fe500c0))
+  * Submitter will now appear in another language if the system language is not English. 
+* small files in syncInputJobAttachment causes sync cancel (#908) ([`8f5f29b`](https://github.com/aws-deadline/deadline-cloud/commit/8f5f29bfc71eac1ccd595a2e26714c067957c587))
+  * The parameter `processedFiles` is added to `ProgressReportMetadata`.
+* `deadline.ui.show_job_bundle_submitter`: Input parameter renamed from `submitter_name` to `submitter_info` and now expects a `deadline.dataclasses.SubmitterInfo` object as input. (#940) ([`74a3b01`](https://github.com/aws-deadline/deadline-cloud/commit/74a3b01feeae875ec4b5ff056430a1311fb2ce45))
+* `deadline.ui.SubmitJobToDeadlineDialog`: The `SubmitJobToDeadlineDialog.submitter_name` property has been removed and the name can now be accessed via `SubmitJobToDeadlineDialog.submitter_info.submitter_name` (#940) ([`74a3b01`](https://github.com/aws-deadline/deadline-cloud/commit/74a3b01feeae875ec4b5ff056430a1311fb2ce45))
+
+### Features
+* report paths of downloaded files in json summary (#919) ([`e288776`](https://github.com/aws-deadline/deadline-cloud/commit/e288776ce1c378361852f6ab29f32f650d901f60))
+* add foundations for future non-english UI translations (#901) ([`70dd775`](https://github.com/aws-deadline/deadline-cloud/commit/70dd775b258eb237c9c4c82197fddd006a7887c7))
+* add an 'About' dialog to show version information (#940) ([`74a3b01`](https://github.com/aws-deadline/deadline-cloud/commit/74a3b01feeae875ec4b5ff056430a1311fb2ce45))
+
+### Bug Fixes
+* process hangs on exit with high volume of telemetry (#936) ([`938d9f2`](https://github.com/aws-deadline/deadline-cloud/commit/938d9f28767e120d059d85f126316714c0764711))
+* Job progress dialog moves behind submitter dialog. (#920) ([`94e6815`](https://github.com/aws-deadline/deadline-cloud/commit/94e6815fe0af3bb74b3a1fc79997441e1eab1918))
+* host requirement amounts with value of 0 not accepted (#917) ([`44fbe1f`](https://github.com/aws-deadline/deadline-cloud/commit/44fbe1fb7b3aa4101f43d96acff8af211d7da787))
+* HashDB does not retry when failing to open. ([`b332672`](https://github.com/aws-deadline/deadline-cloud/commit/b33267263af232d14b0f59422e26a2953f35bbde))
+
+### Performance Improvements
+* **installer**: reduce installation size by not duplicating files (#934) ([`3d41212`](https://github.com/aws-deadline/deadline-cloud/commit/3d412126afd5ed189d8eede20dafd37651228afa))
+
+### Experimental
+These changes are experimental and are subject to change.
+
+* add get_session_logs to mcp server (#909) ([`c9f83a4`](https://github.com/aws-deadline/deadline-cloud/commit/c9f83a4a4d6675c39048c609d2101903f6f7d290))
+
+## 0.53.3 (2025-11-04)
+
+## DEPRECATIONS
+* `--timezone` is being deprecated in favor of `--timestamp-format` for the `job logs` command. `--timezone` will be removed in a future release. See (#898) for more details.
+
+### Features
+* **cli**: Add --timestamp-format relative option to 'job logs' command (#898) ([`36ba412`](https://github.com/aws-deadline/deadline-cloud/commit/36ba4125d359c9de59885a453c17c5ab4b46822e))
+* **cli**: Add --session-action-id option to 'deadline job logs' (#894) ([`c37635e`](https://github.com/aws-deadline/deadline-cloud/commit/c37635eb5b4412c035792075699ad37f41827f7f))
+* Chunked session action outputs can now be downloaded  (#858) ([`8d8daba`](https://github.com/aws-deadline/deadline-cloud/commit/8d8dabac426bea4c32a7bc888d02fb593340f753))
+
+### Bug Fixes
+* HashDB does not retry when failing to open. (#884) ([`08c1e89`](https://github.com/aws-deadline/deadline-cloud/commit/08c1e89cecc02c42df50316d1ec260369fabff70))
+* Job submission error when submitting same jobs with the same title over 100 times in a single day. (#888) ([`2c5b952`](https://github.com/aws-deadline/deadline-cloud/commit/2c5b9521d61b7fc21cc20c68ca9510ecb820ba52))
+
+### Performance Improvements
+* Improve concurrency during bundle submission by threading local s3 cache db connections and enabling WAL mode by default. (#896) ([`ba15300`](https://github.com/aws-deadline/deadline-cloud/commit/ba15300073f37c94b8f902f3c7fcdd470ca245b7))
+
+## 0.53.2 (2025-10-17)
+
+### Bug Fixes
+* revert: HashCache DB changes causing job submission failures (#892) ([`f716769`](https://github.com/aws-deadline/deadline-cloud/commit/f71676940366dca635607048ddb70267381076))
+
+
 ## 0.53.1 (2025-10-10)
 
 ### Features

@@ -213,7 +213,13 @@ class TelemetryClient:
         return metadata
 
     def _exit_cleanly(self):
-        self.event_queue.put(None)
+        try:
+            self.event_queue.put_nowait(None)
+        except Full:
+            # If the queue is full, it may mean the telemetry processing thread has already joined
+            # since it is daemon and the Python runtime will shut it down on exit.
+            # Ignore the error, since this is a best-effort cleanup.
+            pass
         self.processing_thread.join()
 
     def _send_request(self, req: request.Request) -> None:
@@ -290,6 +296,11 @@ class TelemetryClient:
         except Full:
             # Silently swallow the error if the event queue is full (due to throttling of the service)
             pass
+
+    def record_vfs_mounting(self, successfully_mounted: bool):
+        details: Dict[str, Any] = {"successfully_mounted": successfully_mounted}
+        event_type = "com.amazon.rum.deadline.job_attachments.vfs_mount"
+        self.record_event(event_type=event_type, event_details=details, from_gui=False)
 
     def _record_summary_statistics(
         self, event_type: str, summary: SummaryStatistics, from_gui: bool

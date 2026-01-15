@@ -12,6 +12,7 @@ Table of Contents:
    * [Unit tests](#unit-tests)
    * [Integration tests](#integration-tests)
    * [Squish GUI Submitter tests](#squish-tests)
+* [Changelog Guidelines](#changelog-guidelines)
 * [Things to Know](#things-to-know)
    * [Public contracts](#public-contracts)
    * [Library Dependencies](#dependencies)
@@ -145,9 +146,10 @@ interfaces with the local filesystem or an AWS service API.
 
 #### Running Integration Tests
 
-Our integration tests run using using infrastructure that is in your AWS Account. The identifiers for
-these resources are communicated to the tests through environment variables that you must define before running
-the tests. Define the following environment variables:
+Our integration tests run using infrastructure that is in your AWS Account. A Farm, Queue and Fleet (that associated with 
+the Queue) will be required to run the integration tests. The identifiers for these resources are communicated to the 
+tests through environment variables that you must define before running the tests. Define the following environment 
+variables:
 
 ```bash
 # Replace with your AWS Account ID
@@ -199,6 +201,17 @@ Squish GUI tests are located under the `test/squish` directory of this repositor
 
 A separate ReadMe for developing/running Squish GUI tests is located in the `test/squish` directory. Please refer to [test/squish/SQUISH_README.md](./test/squish/SQUISH_README.md) on full instructions to use the automated tests. Note that a Squish license is required in order to run the tests. Currently, you may either have your own Squish license or you may file a [pull request](https://help.github.com/articles/creating-a-pull-request/) to the Deadline Cloud team to run or add any tests against any changes to be committed. Please perform any necessary manual tests prior to submitting any changes, in addition to making sure at least a minimal render job test passes.
 
+## Changelog Guidelines
+
+When a new version of `deadline` is being released, we must prepare an update to our change log (`CHANGELOG.md`). This is a semi-automated process. GitHub actions prepares a pull request with an automatically generated draft of the changelog entry. Maintainers are responsible for reviewing the draft, making any necessary changes, and reviewing the changes in the pull request. Please consult in [CHANGELOG_GUIDELINES.md](./CHANGELOG_GUIDELINES.md) for the changelog guidelines. These guidelines ensure consistency in how we communicate changes to users and provide standards for:
+
+* Structuring changelog sections and their ordering
+* Writing user-focused descriptions for different types of changes
+* Handling breaking changes with proper migration guidance
+* Communicating deprecations effectively
+* Managing fixes to unreleased changes
+* Documenting changes to experimental features
+
 ## Things to Know
 
 ### Public Contracts
@@ -224,6 +237,89 @@ For the Python library interface:
 * Changing a default argument value is a breaking change.
 * Changing the location that a file or directory is created should be considered to be a breaking change. These locations have a tendancy to become
   de-facto parts of the public contract as users build automation that assumes these locations is unchanged.
+
+Note that we enforce our public contract through GitHub actions. See the [API Change Detection section](scripts/README.md#api-change-detection) in the scripts README for more information about generating and validating API changes.
+
+#### Private Modules
+
+New code should reside in private modules (example: `_my_module.py`), which removes the need to mark imports, classes, and functions as private with an underscore.
+
+```python
+# _my_module.py
+import os
+
+class PublicClass:
+    def publicmethod(self):
+        pass
+    # We still need to mark this as private, since the class will be public
+    def _privatemethod(self):
+        pass
+
+class PrivateClass:
+    def privatemethod(self):
+        pass
+```
+
+Public contracts in private modules are defined by imports in the corresponding `__init__.py` in the same directory as the private module.
+
+```python
+# __init__.py
+
+from _my_module import PublicClass
+```
+
+#### Public Modules
+
+A public module (for example `my_module.py`) in this package will be defined with the following style:
+
+```python
+# my_module.py
+
+# The os module is not part of this file's external interface
+import os as _os
+
+# PublicClass is part of this file's external interface.
+class PublicClass:
+    def publicmethod(self):
+        pass
+
+    def _privatemethod(self):
+        pass
+
+# _PrivateClass is not part of this file's external interface.
+class _PrivateClass:
+    def publicmethod(self):
+        pass
+
+    def _privatemethod(self):
+        pass
+```
+
+#### On `import os as _os`
+
+Every module/symbol that is imported into a Python module becomes a part of that module's interface.
+Thus, if we have a module called `foo.py` such as:
+
+```python
+# foo.py
+
+import os
+```
+
+Then, the `os` module becomes part of the public interface for `foo.py` and a consumer of that module
+is free to do:
+
+```python
+from foo import os
+```
+
+We don't want all (generally, we don't want any) of our imports to become part of the public API for
+the module, so we import modules/symbols into a public module with the following style:
+
+```python
+import os as _os
+from typing import Dict as _Dict
+```
 
 ### Library Dependencies
 
