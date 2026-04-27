@@ -230,6 +230,14 @@ load_different_job_bundle_button = {
     "unnamed": 1,
     "visible": 1,
 }
+# export bundle button in AWS Submitter dialogue
+export_bundle_button = {
+    "text": "Export bundle",
+    "type": "QPushButton",
+    "unnamed": 1,
+    "visible": 1,
+    "window": aws_submitter_dialogue,
+}
 # job history directory default filepath input
 job_hist_dir_dropdown = {
     "container": properties_only_widget,
