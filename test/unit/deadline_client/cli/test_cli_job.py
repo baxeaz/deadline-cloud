@@ -4,6 +4,7 @@
 Tests for the CLI job commands.
 """
 
+from datetime import timezone
 import datetime
 import json
 import os
@@ -26,6 +27,10 @@ from deadline.client.cli._groups.job_group import (
     _get_json_line,
     _get_download_summary_message,
 )
+from deadline.client.cli._groups._job_helpers import (
+    _format_duration,
+    _estimate_remaining_time,
+)
 from deadline.client.exceptions import DeadlineOperationError, DeadlineOperationTimedOut
 from deadline.job_attachments.models import (
     FileConflictResolution,
@@ -45,8 +50,6 @@ from ..shared_constants import (
     MOCK_SESSION_ACTION_ID,
     MOCK_STEP_ID,
     MOCK_TASK_ID,
-    MOCK_FLEET_ID,
-    MOCK_WORKER_ID,
 )
 
 MOCK_JOBS_LIST = [
@@ -73,69 +76,6 @@ MOCK_JOBS_LIST = [
         "priority": 50,
     },
 ]
-
-MOCK_SESSIONS_LIST = [
-    {
-        "sessionId": "session-1",
-        "fleetId": MOCK_FLEET_ID,
-        "workerId": MOCK_WORKER_ID,
-        "startedAt": datetime.datetime(2023, 1, 27, 7, 24, 22, tzinfo=tzutc()),
-        "lifecycleStatus": "ENDED",
-        "endedAt": datetime.datetime(2023, 1, 27, 7, 25, 22, tzinfo=tzutc()),
-    },
-]
-
-MOCK_SESSION_ACTIONS_LIST = [
-    {
-        "sessionActionId": "sessionaction-1-0",
-        "status": "SUCCEEDED",
-        "startedAt": datetime.datetime(2023, 1, 27, 7, 24, 45, tzinfo=tzutc()),
-        "endedAt": datetime.datetime(2023, 1, 27, 7, 25, 15, tzinfo=tzutc()),
-        "progressPercent": 100.0,
-        "definition": {
-            "taskRun": {
-                "taskId": "task-0a0ac395f3ed4d61bda7019874b1f384-0",
-                "stepId": "step-0a0ac395f3ed4d61bda7019874b1f384",
-            }
-        },
-    },
-]
-
-MOCK_STEP = {
-    "stepId": "step-0a0ac395f3ed4d61bda7019874b1f384",
-    "name": "Step Name",
-    "lifecycleStatus": "CREATE_COMPLETE",
-    "taskRunStatus": "SUCCEEDED",
-    "taskRunStatusCounts": {
-        "PENDING": 0,
-        "READY": 0,
-        "RUNNING": 0,
-        "ASSIGNED": 0,
-        "STARTING": 0,
-        "SCHEDULED": 0,
-        "INTERRUPTING": 0,
-        "SUSPENDED": 0,
-        "CANCELED": 0,
-        "FAILED": 0,
-        "SUCCEEDED": 1,
-    },
-    "createdAt": datetime.datetime(2023, 1, 27, 7, 14, 41, tzinfo=tzutc()),
-    "createdBy": "a4a874f8-10b1-70d6-e763-a0e3822893b0",
-    "startedAt": datetime.datetime(2023, 1, 27, 7, 24, 45, tzinfo=tzutc()),
-    "endedAt": datetime.datetime(2023, 1, 27, 7, 25, 15, tzinfo=tzutc()),
-}
-
-MOCK_TASK = {
-    "taskId": "task-0a0ac395f3ed4d61bda7019874b1f384-2",
-    "createdAt": datetime.datetime(2023, 1, 27, 7, 14, 41, tzinfo=tzutc()),
-    "createdBy": "a4a874f8-10b1-70d6-e763-a0e3822893b0",
-    "runStatus": "SUCCEEDED",
-    "failureRetryCount": 0,
-    "parameters": {},
-    "startedAt": datetime.datetime(2023, 1, 27, 7, 24, 45, tzinfo=tzutc()),
-    "endedAt": datetime.datetime(2023, 1, 27, 7, 25, 15, tzinfo=tzutc()),
-    "latestSessionActionId": "sessionaction-1-0",
-}
 
 os.environ["AWS_ENDPOINT_URL_DEADLINE"] = "https://fake-endpoint"
 
@@ -169,6 +109,7 @@ def test_cli_job_list(fresh_deadline_config):
   endedAt: 2023-01-27 07:39:17+00:00
   createdBy: b801f3c0-c071-70bc-b869-6804bc732408
   createdAt: 2023-01-27 07:34:41+00:00
+  estimatedTimeRemaining: N/A
 - name: CLI Job
   jobId: job-0d239749fa05435f90263b3a8be54144
   taskRunStatus: COMPLETED
@@ -176,6 +117,7 @@ def test_cli_job_list(fresh_deadline_config):
   endedAt: 2023-01-27 07:29:51+00:00
   createdBy: b801f3c0-c071-70bc-b869-6804bc732408
   createdAt: 2023-01-27 07:24:22+00:00
+  estimatedTimeRemaining: N/A
 
 """
         )
@@ -211,6 +153,7 @@ def test_cli_job_list_explicit_farm_and_queue_id(fresh_deadline_config):
   endedAt: 2023-01-27 07:39:17+00:00
   createdBy: b801f3c0-c071-70bc-b869-6804bc732408
   createdAt: 2023-01-27 07:34:41+00:00
+  estimatedTimeRemaining: N/A
 - name: CLI Job
   jobId: job-0d239749fa05435f90263b3a8be54144
   taskRunStatus: COMPLETED
@@ -218,6 +161,7 @@ def test_cli_job_list_explicit_farm_and_queue_id(fresh_deadline_config):
   endedAt: 2023-01-27 07:29:51+00:00
   createdBy: b801f3c0-c071-70bc-b869-6804bc732408
   createdAt: 2023-01-27 07:24:22+00:00
+  estimatedTimeRemaining: N/A
 
 """
         )
@@ -246,7 +190,9 @@ def test_cli_job_list_override_profile(fresh_deadline_config):
         result = runner.invoke(main, ["job", "list", "--profile", "NonDefaultProfileName"])
 
         assert result.exit_code == 0
-        session_mock.assert_called_once_with(profile_name="NonDefaultProfileName")
+        session_mock.assert_called_once_with(
+            profile_name="NonDefaultProfileName", botocore_session=ANY
+        )
         session_mock().client().search_jobs.assert_called_once_with(
             farmId="farm-overriddenid",
             queueIds=["queue-overriddenid"],
@@ -340,6 +286,7 @@ startedAt: 2023-01-27 07:37:53+00:00
 endedAt: 2023-01-27 07:39:17+00:00
 priority: 50
 
+estimatedTimeRemaining: N/A
 """
         )
         session_mock().client("deadline").get_job.assert_called_once_with(
@@ -373,7 +320,11 @@ def test_cli_job_download_output_stdout_with_only_required_input(
         )
         MockOutputDownloader.return_value.download_job_output = mock_download
         mock_root_path = "/root/path" if sys.platform != "win32" else "C:\\Users\\username"
-        mock_files_list = ["outputs/file1.txt", "outputs/file2.txt", "outputs/file3.txt"]
+        mock_files_list = [
+            "outputs/file1.txt",
+            "outputs/file2.txt",
+            "outputs/file3.txt",
+        ]
         MockOutputDownloader.return_value.get_output_paths_by_root.side_effect = [
             {
                 f"{mock_root_path}": mock_files_list,
@@ -486,7 +437,11 @@ def test_cli_job_download_output_stdout_with_mismatching_path_format(
         MockOutputDownloader.return_value.download_job_output = mock_download
 
         mock_root_path = "C:\\Users\\username" if sys.platform != "win32" else "/root/path"
-        mock_files_list = ["outputs/file1.txt", "outputs/file2.txt", "outputs/file3.txt"]
+        mock_files_list = [
+            "outputs/file1.txt",
+            "outputs/file2.txt",
+            "outputs/file3.txt",
+        ]
         MockOutputDownloader.return_value.get_output_paths_by_root.side_effect = [
             {
                 f"{mock_root_path}": mock_files_list,
@@ -588,7 +543,11 @@ def test_cli_job_download_output_handles_unc_path_on_windows(fresh_deadline_conf
 
         # UNC format (which refers to the same location as 'C:\Users\username')
         mock_root_path = "\\\\127.0.0.1\\c$\\Users\\username"
-        mock_files_list = ["outputs/file1.txt", "outputs/file2.txt", "outputs/file3.txt"]
+        mock_files_list = [
+            "outputs/file1.txt",
+            "outputs/file2.txt",
+            "outputs/file3.txt",
+        ]
         MockOutputDownloader.return_value.get_output_paths_by_root.side_effect = [
             {
                 f"{mock_root_path}": mock_files_list,
@@ -756,7 +715,11 @@ def test_cli_job_download_output_stdout_with_json_format(
             ],
         )
         MockOutputDownloader.return_value.download_job_output = mock_download
-        mock_files_list = ["outputs/file1.txt", "outputs/file2.txt", "outputs/file3.txt"]
+        mock_files_list = [
+            "outputs/file1.txt",
+            "outputs/file2.txt",
+            "outputs/file3.txt",
+        ]
         MockOutputDownloader.return_value.get_output_paths_by_root.side_effect = [
             {
                 f"{mock_root_path}": mock_files_list,
@@ -877,7 +840,10 @@ def test_cli_job_download_output_stdout_with_json_format(
         ),
         (
             {
-                "/home/username/project01": ["renders/image1.png", "renders/image2.png"],
+                "/home/username/project01": [
+                    "renders/image1.png",
+                    "renders/image2.png",
+                ],
                 "/home/username/project02": [
                     "renders/image1.png",
                     "renders/image2.png",
@@ -1128,7 +1094,9 @@ def test_cli_job_wait_not_compatible(fresh_deadline_config):
         assert result.exit_code == 5
 
 
-def test_cli_job_wait_succeeded_with_failed_tasks_returns_exit_code_2(fresh_deadline_config):
+def test_cli_job_wait_succeeded_with_failed_tasks_returns_exit_code_2(
+    fresh_deadline_config,
+):
     """
     Test that job wait command returns exit code 2 when there are failed tasks, even if status is SUCCEEDED.
     """
@@ -1353,7 +1321,9 @@ def test_cli_job_wait_error_handling_json_output(fresh_deadline_config):
         assert result.exit_code == 2
 
 
-def test_cli_job_download_output_handle_web_url_with_optional_input(fresh_deadline_config):
+def test_cli_job_download_output_handle_web_url_with_optional_input(
+    fresh_deadline_config,
+):
     """
     Confirm that the CLI interface prints out the expected list of
     farms, given mock data.
@@ -1428,71 +1398,10 @@ def test_cli_job_download_output_handle_web_url_with_optional_input(fresh_deadli
         assert result.exit_code == 0
 
 
-def test_cli_job_trace_schedule(fresh_deadline_config):
-    """
-    A very minimal sanity check of the trace-schedule CLI command.
-    To test the function more thoroughly involves creating a mock
-    set of APIs that return a coherent set of data based on the query
-    IDs instead of single mocked returns as this test does.
-    """
-
-    with patch.object(api._session, "get_boto3_session") as session_mock:
-        deadline_mock = session_mock().client("deadline")
-        deadline_mock.get_job.return_value = MOCK_JOBS_LIST[0]
-        deadline_mock.list_sessions.return_value = {"sessions": MOCK_SESSIONS_LIST}
-        deadline_mock.list_session_actions.return_value = {
-            "sessionActions": MOCK_SESSION_ACTIONS_LIST
-        }
-        deadline_mock.get_step.return_value = MOCK_STEP
-        deadline_mock.get_task.return_value = MOCK_TASK
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "job",
-                "trace-schedule",
-                "--farm-id",
-                MOCK_FARM_ID,
-                "--queue-id",
-                MOCK_QUEUE_ID,
-                "--job-id",
-                str(MOCK_JOBS_LIST[0]["jobId"]),
-            ],
-        )
-
-        assert (
-            result.output
-            == """Getting the job...
-Getting all the sessions for the job...
-Getting all the session actions for the job...
-Getting all the steps and tasks for the job...
-Processing the trace data...
-
- ==== SUMMARY ====
-
-Session Count: 1
-Session Total Duration: 0:01:00
-Session Action Count: 1
-Session Action Total Duration: 0:00:30
-Task Run Count: 1
-Task Run Total Duration: 0:00:30 (50.0%)
-Non-Task Run Count: 0
-Non-Task Run Total Duration: 0:00:00 (0.0%)
-Sync Job Attachments Count: 0
-Sync Job Attachments Total Duration: 0:00:00 (0.0%)
-Env Action Count: 0
-Env Action Total Duration: 0:00:00 (0.0%)
-
-Within-session Overhead Duration: 0:00:30 (50.0%)
-Within-session Overhead Duration Per Action: 0:00:30
-"""
-        )
-        assert result.exit_code == 0
-
-
 @pytest.mark.usefixtures("fresh_deadline_config")
-def test_cli_job_download_output_with_different_asset_root_path_format_than_job(tmp_path: Path):
+def test_cli_job_download_output_with_different_asset_root_path_format_than_job(
+    tmp_path: Path,
+):
     """
     Tests whether the output messages printed to stdout match expected messages
     when `download-output` command is executed.
@@ -1521,7 +1430,11 @@ def test_cli_job_download_output_with_different_asset_root_path_format_than_job(
         windows_root_path = "C:\\Users\\username"
         not_windows_root_path = "/root/path"
         mock_root_path = not_windows_root_path if sys.platform == "win32" else windows_root_path
-        mock_files_list = ["outputs/file1.txt", "outputs/file2.txt", "outputs/file3.txt"]
+        mock_files_list = [
+            "outputs/file1.txt",
+            "outputs/file2.txt",
+            "outputs/file3.txt",
+        ]
         MockOutputDownloader.return_value.get_output_paths_by_root.side_effect = [
             {
                 f"{mock_root_path}": mock_files_list,
@@ -1611,7 +1524,9 @@ class TestJsonLineHelpers:
     def test_get_json_line_with_kwargs(self):
         """Test _get_json_line with additional properties."""
         result = _get_json_line(
-            "summary", "Downloaded 5 files", extra_properties={"fileCount": 5, "status": "complete"}
+            "summary",
+            "Downloaded 5 files",
+            extra_properties={"fileCount": 5, "status": "complete"},
         )
         parsed = json.loads(result)
 
@@ -1793,3 +1708,64 @@ def test_cli_job_download_output_with_session_action_id(fresh_deadline_config):
             session_action_id=MOCK_SESSION_ACTION_ID,
             session=ANY,
         )
+
+
+class TestEstimateCompletionTime:
+    def test_format_duration_seconds(self):
+        assert _format_duration(30) == "30 seconds"
+
+    def test_format_duration_minutes(self):
+        assert _format_duration(120) == "2 minutes"
+        assert _format_duration(60) == "1 minute"
+
+    def test_format_duration_hours(self):
+        assert _format_duration(3600) == "1 hour"
+        assert _format_duration(5400) == "1 hour, 30 minutes"
+
+    def test_estimate_remaining_time_no_tasks(self):
+        job: dict = {"taskRunStatusCounts": {}, "startedAt": None}
+        assert _estimate_remaining_time(job) is None
+
+    def test_estimate_remaining_time_completed_job(self):
+        job = {
+            "taskRunStatusCounts": {"SUCCEEDED": 10, "RUNNING": 0, "READY": 0},
+            "startedAt": datetime.datetime.now(timezone.utc),
+        }
+        assert _estimate_remaining_time(job) is None
+
+
+def test_cli_job_list_with_estimates(fresh_deadline_config, deadline_mock):
+    """
+    Confirm that the CLI interface prints estimated time remaining
+    for in-progress jobs.
+    """
+    config.set_setting("defaults.farm_id", MOCK_FARM_ID)
+    config.set_setting("defaults.queue_id", MOCK_QUEUE_ID)
+
+    mock_job_with_task_counts = {
+        "jobId": "job-aaf4cdf8aae242f58fb84c5bb19f199b",
+        "name": "CLI Job",
+        "taskRunStatus": "RUNNING",
+        "lifecycleStatus": "CREATE_COMPLETE",
+        "createdBy": "b801f3c0-c071-70bc-b869-6804bc732408",
+        "createdAt": datetime.datetime(2023, 1, 27, 7, 34, 41, tzinfo=tzutc()),
+        "startedAt": datetime.datetime(2023, 1, 27, 7, 37, 53, tzinfo=tzutc()),
+        "priority": 50,
+        "taskRunStatusCounts": {
+            "SUCCEEDED": 5,
+            "RUNNING": 2,
+            "READY": 3,
+        },
+    }
+
+    deadline_mock.search_jobs.return_value = {
+        "jobs": [mock_job_with_task_counts],
+        "totalResults": 1,
+        "itemOffset": 1,
+    }
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["job", "list"])
+
+    assert result.exit_code == 0
+    assert "estimatedTimeRemaining:" in result.output

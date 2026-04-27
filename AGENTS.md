@@ -84,6 +84,20 @@ Use [conventional commits](https://www.conventionalcommits.org/):
 - `perf:` - Performance improvements
 - `feat!:` or `fix!:` - Breaking changes (Also include `BREAKING CHANGES:` section in message body)
 
+### Before Committing / Raising a PR
+
+After completing any code changes:
+1. Always run `hatch run fmt` and `hatch run lint` to verify the changes are clean.
+2. If also committing, run the full checklist: fmt → lint → test → build → `git commit -s`.
+
+```bash
+hatch run fmt            # Auto-format code
+hatch run lint           # Linting and type checking
+hatch run test           # Unit tests (must pass with ≥80% coverage)
+hatch build              # Build wheel/sdist
+git commit -s            # Always sign commits with -s
+```
+
 ## Testing
 
 - **Unit tests:** `test/unit/` - Run with `hatch run test`

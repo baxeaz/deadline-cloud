@@ -1,6 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 from typing import Any, Dict
+import platform
 import pytest
 import uuid
 import time
@@ -13,7 +14,9 @@ from deadline.client import api, config
 from deadline.client.api._telemetry import (
     TelemetryClient,
     TelemetryEvent,
+    _swallow_exceptions,
     get_deadline_cloud_library_telemetry_client,
+    get_telemetry_client,
     record_success_fail_telemetry_event,
     record_function_latency_telemetry_event,
 )
@@ -415,3 +418,131 @@ def test_latency_decorator(fresh_deadline_config):
 
         # THEN
         queue_mock.put_nowait.assert_called_once_with(expected_event)
+
+
+def test_get_telemetry_client_caches_by_package_name(fresh_deadline_config):
+    """
+    Verify that get_telemetry_client returns different clients for different package names.
+    """
+    import deadline.client.api._telemetry as telemetry_mod
+
+    telemetry_mod.__cached_telemetry_clients = {}
+
+    def fake_init(self, **kwargs):
+        self._initialized = True
+        self.package_name = kwargs["package_name"]
+
+    with patch.object(TelemetryClient, "__init__", fake_init):
+        client_a = get_telemetry_client("package-a", "1.0.0")
+        client_b = get_telemetry_client("package-b", "2.0.0")
+        client_a_again = get_telemetry_client("package-a", "1.0.0")
+
+        assert client_a is not client_b
+        assert client_a is client_a_again
+        assert client_a.package_name == "package-a"
+        assert client_b.package_name == "package-b"
+
+    telemetry_mod.__cached_telemetry_clients = {}
+
+
+class TestSwallowExceptionsDecorator:
+    """Tests for the _swallow_exceptions decorator"""
+
+    def test_returns_value_on_success(self):
+        @_swallow_exceptions
+        def succeeds():
+            return 42
+
+        assert succeeds() == 42
+
+    def test_returns_none_on_exception(self):
+        @_swallow_exceptions
+        def fails():
+            raise RuntimeError("boom")
+
+        assert fails() is None
+
+    def test_logs_exception(self):
+        @_swallow_exceptions
+        def fails():
+            raise RuntimeError("boom")
+
+        with patch("deadline.client.api._telemetry.logger") as mock_logger:
+            fails()
+            mock_logger.debug.assert_called_once()
+            assert "fails" in mock_logger.debug.call_args[0][1]
+
+    def test_preserves_function_name(self):
+        @_swallow_exceptions
+        def my_func():
+            pass
+
+        assert my_func.__name__ == "my_func"
+
+
+class TestTelemetryClientSwallowExceptions:
+    """Tests that decorated TelemetryClient methods don't propagate exceptions"""
+
+    def test_set_opt_out_swallows_exception(self, fresh_deadline_config, mock_telemetry_client):
+        with patch.object(config.config_file, "get_setting", side_effect=RuntimeError("boom")):
+            mock_telemetry_client.set_opt_out()
+
+    def test_initialize_swallows_exception(self, fresh_deadline_config, mock_telemetry_client):
+        mock_telemetry_client._initialized = False
+        mock_telemetry_client.telemetry_opted_out = False
+        with patch.object(
+            api._telemetry, "get_deadline_endpoint_url", side_effect=RuntimeError("boom")
+        ):
+            mock_telemetry_client.initialize()
+        assert not mock_telemetry_client.is_initialized
+
+    def test_record_event_swallows_exception(self, fresh_deadline_config, mock_telemetry_client):
+        with patch.object(
+            mock_telemetry_client, "get_account_id", side_effect=RuntimeError("boom")
+        ), patch.object(api._telemetry, "get_boto3_session"):
+            mock_telemetry_client.record_event(
+                event_type="com.amazon.rum.deadline.test",
+                event_details=None,  # type: ignore
+                from_gui=False,
+            )
+
+    def test_exit_cleanly_swallows_exception(self, fresh_deadline_config, mock_telemetry_client):
+        mock_telemetry_client.event_queue = MagicMock()
+        mock_telemetry_client.event_queue.put_nowait.side_effect = RuntimeError("boom")
+        mock_telemetry_client._exit_cleanly()
+
+    def test_init_swallows_get_telemetry_identifier_exception(self, fresh_deadline_config):
+        config.set_setting("defaults.aws_profile_name", "SomeRandomProfileName")
+        with patch.object(api.TelemetryClient, "_start_threads"), patch.object(
+            api._telemetry, "get_monitor_id", side_effect=[None]
+        ), patch.object(
+            api._telemetry,
+            "get_user_and_identity_store_id",
+            side_effect=[("user-id", "identity-store-id")],
+        ), patch.object(
+            api._telemetry, "get_deadline_endpoint_url", side_effect=["https://fake-endpoint-url"]
+        ), patch.object(config.config_file, "get_setting", side_effect=RuntimeError("boom")):
+            client = TelemetryClient(
+                package_name="deadline-cloud-library",
+                package_ver="0.1.2.1234",
+                config=config.config_file.read_config(),
+            )
+            assert client.telemetry_id is not None
+
+    def test_init_swallows_get_system_metadata_exception(self, fresh_deadline_config):
+        config.set_setting("defaults.aws_profile_name", "SomeRandomProfileName")
+        with patch.object(api.TelemetryClient, "_start_threads"), patch.object(
+            api._telemetry, "get_monitor_id", side_effect=[None]
+        ), patch.object(
+            api._telemetry,
+            "get_user_and_identity_store_id",
+            side_effect=[("user-id", "identity-store-id")],
+        ), patch.object(
+            api._telemetry, "get_deadline_endpoint_url", side_effect=["https://fake-endpoint-url"]
+        ), patch.object(platform, "uname", side_effect=RuntimeError("boom")):
+            client = TelemetryClient(
+                package_name="deadline-cloud-library",
+                package_ver="0.1.2.1234",
+                config=config.config_file.read_config(),
+            )
+            assert "version" not in client._system_metadata

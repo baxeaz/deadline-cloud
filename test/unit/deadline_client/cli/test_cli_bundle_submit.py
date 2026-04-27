@@ -119,7 +119,7 @@ def test_cli_bundle_explicit_parameters(fresh_deadline_config, temp_job_bundle_d
             ],
         )
 
-    session_mock.assert_called_with(profile_name="NonDefaultProfileName")
+    session_mock.assert_called_with(profile_name="NonDefaultProfileName", botocore_session=ANY)
     session_mock().client().create_job.assert_called_once_with(
         farmId=MOCK_FARM_ID,
         queueId=MOCK_QUEUE_ID,
@@ -695,6 +695,34 @@ def test_gui_submit_submitter_name(_mock_context, mock_job_bundle_submitter):
     )
     _args, kwargs = mock_job_bundle_submitter.show_job_bundle_submitter.call_args
     assert kwargs["submitter_info"] == SubmitterInfo(submitter_name="MyDCC")
+
+
+@patch.object(deadline.client.ui, "gui_context_for_cli")
+def test_gui_submit_name(_mock_context, mock_job_bundle_submitter):
+    """
+    Verify that --name gets passed through to show_job_bundle_submitter.
+    """
+    runner = CliRunner()
+    runner.invoke(
+        main,
+        ["bundle", "gui-submit", "--browse", "--name", "My Custom Job Name"],
+    )
+    _args, kwargs = mock_job_bundle_submitter.show_job_bundle_submitter.call_args
+    assert kwargs["name"] == "My Custom Job Name"
+
+
+@patch.object(deadline.client.ui, "gui_context_for_cli")
+def test_gui_submit_name_default(_mock_context, mock_job_bundle_submitter):
+    """
+    Verify that when --name is not provided, None is passed through.
+    """
+    runner = CliRunner()
+    runner.invoke(
+        main,
+        ["bundle", "gui-submit", "--browse"],
+    )
+    _args, kwargs = mock_job_bundle_submitter.show_job_bundle_submitter.call_args
+    assert kwargs["name"] is None
 
 
 def test_bundle_submit_with_target_task_run_status(

@@ -65,7 +65,7 @@ def test_cli_redirect_output(fresh_deadline_config, tmp_path):
     with open(out_file, encoding="utf-8") as fh:
         file_output = fh.read()
     assert file_output.startswith("Usage: ")
-    assert "Commands to show and update Deadline's workstation configuration." in file_output
+    assert "View and update Deadline's workstation configuration" in file_output
 
 
 @pytest.mark.parametrize("redirect_mode", ("append", "replace"))
@@ -110,9 +110,7 @@ def test_cli_redirect_output_with_mode(fresh_deadline_config, tmp_path, redirect
     else:
         # The starting file contents should be replaced
         assert file_output.startswith("Usage: "), file_output
-    assert "Commands to show and update Deadline's workstation configuration." in file_output, (
-        file_output
-    )
+    assert "View and update Deadline's workstation configuration" in file_output, file_output
 
 
 def test_cli_unfamiliar_exception(fresh_deadline_config):
@@ -213,3 +211,94 @@ def test_context_tracking_command_sets_boto_user_agent_extra():
     config = get_default_client_config()
 
     assert "cli-command/main.subcommand.command" in config.user_agent_extra
+
+
+def test_submitter_version_in_user_agent():
+    """
+    Verifies that the submitter version is included in the user_agent_extra when set.
+    """
+    from deadline.client.api._session import session_context
+
+    # Save original state
+    original_context = session_context.copy()
+
+    try:
+        # Test: submitter name + version
+        session_context["submitter-name"] = "Blender"
+        session_context["submitter-version"] = "0.5.0"
+        session_context["cli-command-name"] = None
+        config = get_default_client_config()
+        assert "submitter/Blender#0.5.0" in config.user_agent_extra
+
+        # Test: submitter name only (no version)
+        session_context["submitter-name"] = "Blender"
+        session_context["submitter-version"] = None
+        config = get_default_client_config()
+        assert "submitter/Blender" in config.user_agent_extra
+        assert "submitter/Blender#" not in config.user_agent_extra
+
+        # Test: no submitter
+        session_context["submitter-name"] = None
+        session_context["submitter-version"] = None
+        config = get_default_client_config()
+        assert "submitter/" not in config.user_agent_extra
+    finally:
+        # Restore original state
+        session_context.update(original_context)
+
+
+def _run_deadline(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["deadline", *args],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+class TestHelp:
+    """deadline --help and deadline -h should display correct information."""
+
+    def test_help_flag(self):
+        result = _run_deadline("--help")
+        assert result.returncode == 0
+        assert "Usage:" in result.stdout
+        assert "Interact with AWS Deadline Cloud" in result.stdout
+
+    def test_h_flag(self):
+        result = _run_deadline("-h")
+        assert result.returncode == 0
+        assert "Usage:" in result.stdout
+        assert "Interact with AWS Deadline Cloud" in result.stdout
+
+    def test_help_and_h_produce_same_output(self):
+        help_result = _run_deadline("--help")
+        h_result = _run_deadline("-h")
+        assert help_result.stdout == h_result.stdout
+
+
+class TestLogLevel:
+    """deadline --log-level {ERROR,WARNING,INFO,DEBUG} should control verbosity."""
+
+    @pytest.mark.parametrize("level", ["ERROR", "WARNING", "INFO", "DEBUG"])
+    def test_log_level_accepted(self, level):
+        result = _run_deadline("--log-level", level, "config", "--help")
+        assert result.returncode == 0
+
+    def test_debug_more_verbose_than_warning(self):
+        debug = _run_deadline("--log-level", "DEBUG", "config", "--help")
+        warning = _run_deadline("--log-level", "WARNING", "config", "--help")
+        assert debug.returncode == 0
+        assert warning.returncode == 0
+        debug_all = debug.stdout + debug.stderr
+        warning_all = warning.stdout + warning.stderr
+        assert len(debug_all) > len(warning_all)
+
+    def test_error_level_suppresses_debug_message(self):
+        result = _run_deadline("--log-level", "ERROR", "config", "--help")
+        combined = result.stdout + result.stderr
+        assert "Debug logging is on" not in combined
+
+    def test_invalid_log_level_rejected(self):
+        result = _run_deadline("--log-level", "TRACE", "config", "--help")
+        assert result.returncode != 0

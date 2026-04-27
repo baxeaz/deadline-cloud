@@ -1,3 +1,94 @@
+## 0.56.0 (2026-04-20)
+
+### Features
+* The `deadline job trace-schedule` command now uses batch get APIs for tasks and steps, significantly improving performance for jobs with many tasks. (#1117)
+* Job bundles now support pre-submission and post-submission hooks via `hooks.yaml`/`hooks.json` files or the `DEADLINE_HOOKS_DIR` environment variable. Pre-submission hooks can modify the submission before upload, and post-submission hooks run after job creation for notifications or integrations. Hooks are disabled by default and require user confirmation before execution. (#986)
+* The `deadline bundle gui-submit` command now accepts a `--name` option to set the job name. (#1053)
+
+### Bug Fixes
+* Fixed an issue on Windows where logging in with Deadline Cloud Monitor could corrupt the `~/.deadline/config` file due to backslash path separator handling differences between .ini libraries. Path separators are now normalized to forward slashes. (#1098)
+* Improved the error message when a job output download fails because the target directory cannot be created (e.g., due to cross-OS path incompatibilities). The error now clearly explains the failure and suggests re-running the download to choose a valid local path. (#1034)
+## 0.55.1 (2026-04-07)
+
+
+### Features
+* Add newer submitter available dialog. (#1070) ([`a93b553`](https://github.com/aws-deadline/deadline-cloud/commit/a93b553c662e1e703da0503545b4f5f9538551cf))
+
+
+## 0.55.0 (2026-03-26)
+
+### BREAKING CHANGES
+* Decoupled Job Attachments from the Client package — `deadline.job_attachments` no longer imports from `deadline.client` ([migration guide](https://github.com/aws-deadline/deadline-cloud/blob/mainline/docs/design/client-job-attachments-decoupling.md#migration-guide)) (#1076)
+
+### Features
+* Add submission hooks support for job bundles (#986)
+  * Pre-submission and post-submission hooks can be configured via `hooks.yaml` or `hooks.json` in job bundles
+  * Pre-submission hooks run before hashing/uploading and can validate or modify the submission payload
+  * Post-submission hooks run after successful job creation for notifications and integrations
+  * Hooks receive job metadata via stdin (JSON) and environment variables (`DEADLINE_*`)
+  * Works with both `deadline bundle submit` (CLI) and `deadline bundle gui-submit` (GUI)
+* `deadline handle-web-url --install` and `--uninstall` now print a confirmation message on success (#1056) ([`6d0c5d9`](https://github.com/aws-deadline/deadline-cloud/commit/6d0c5d9dc167e8fd65721feb5cd6d318c7f38b44))
+
+### Bug Fixes
+* Telemetry client not correctly labeling the source package when multiple packages use telemetry (#1055) ([`cb47435`](https://github.com/aws-deadline/deadline-cloud/commit/cb47435fefb6232137c66933539a2da259e297d3))
+* `maxResults` parameter in MCP server not working correctly and causing type errors (#1049) ([`a1df215`](https://github.com/aws-deadline/deadline-cloud/commit/a1df215a5669fd735a2d6f8f3a30911860afc219))
+
+
+## 0.54.3 (2026-03-19)
+
+
+### Features
+* Add worker log retrieval to MCP server for job troubleshooting (#999) ([`0378f77`](https://github.com/aws-deadline/deadline-cloud/commit/0378f7792372eecec17e9c72d7bb81f1da977bc3))
+* Show estimated time remaining for in-progress jobs (#992) ([`509af3c`](https://github.com/aws-deadline/deadline-cloud/commit/509af3c63a3620ad625e681210d945b9ea0683f6))
+* Bundle Qt dependencies in installer (#1021) ([`7ec10cc`](https://github.com/aws-deadline/deadline-cloud/commit/7ec10cc4b5a9bec9e861f0fb904bfc8ef9da331b))
+
+### Bug Fixes
+* Update attributions for OS-specific dependencies (#1057) ([`2616a75`](https://github.com/aws-deadline/deadline-cloud/commit/2616a75e63eb8191c3903895507f83247dbb3fed))
+* Show friendly OS name instead of sys.platform in error messages (#1004) (#1045) ([`e0346ce`](https://github.com/aws-deadline/deadline-cloud/commit/e0346ce1aba96dee825d2c650f064d8740fa99aa))
+* Missing newline in terminal output when submitting a job with no attachments (#1008) (#1043) ([`5bce616`](https://github.com/aws-deadline/deadline-cloud/commit/5bce616d4b9c07508b5a0b7de8eb54607ed0ffcf))
+* Show checkboxes in multiselect combo boxes on macOS (#1052) ([`c4eb36b`](https://github.com/aws-deadline/deadline-cloud/commit/c4eb36b93c850330c0928afa00efb84cd3b1864f))
+* Accept hidden parameters with empty string defaults (#1032) ([`347adcc`](https://github.com/aws-deadline/deadline-cloud/commit/347adcce70e873792b62e554d70ab311f2d3ba09))
+* Fix load job bundle button not working (#1041) ([`eee187e`](https://github.com/aws-deadline/deadline-cloud/commit/eee187e7f763a1f52d7d09ee8980801e8c1841c6))
+
+## 0.54.2 (2026-03-04)
+
+
+### Features
+* Improve CLI help text for completeness and readability, including scannable workflows, documentation links, and terminal formatting fixes (#1018) ([`dbc514f`](https://github.com/aws-deadline/deadline-cloud/commit/dbc514f))
+
+
+## 0.54.1 (2026-02-27)
+
+### DEPRECATIONS
+
+* `AssetSync.sync_inputs` and `AssetSync.attachment_sync_inputs` in Job Attachments are deprecated and will be removed in a future version. Use other public APIs under job attachments instead. (#991) ([`5bba469`](https://github.com/aws-deadline/deadline-cloud/commit/5bba469e07e64ed228a218e0b37743e4455bde53))
+
+### Features
+
+* Find jobs by search term with `deadline job get "search term"` instead of requiring an exact job ID (#982) ([`e01b353`](https://github.com/aws-deadline/deadline-cloud/commit/e01b353849610b9ce5b177d0a5e2e8ed38d81b31))
+* CLI now suggests available resources when a resource ID is not found or access is denied (#985) ([`478bf6e`](https://github.com/aws-deadline/deadline-cloud/commit/478bf6e072ba6f28d612689b679fe982735c1860))
+* Add `--force-s3-check` option to `deadline bundle submit` to verify job attachments exist in S3 before skipping upload, useful when S3 bucket contents may be out of sync with local caches (#957) ([`c53f3be`](https://github.com/aws-deadline/deadline-cloud/commit/c53f3be09e146fd7aa9f016ca5f455d692043d50))
+* Add help button with documentation link to the job bundle GUI submitter (#961) ([`a3704fd`](https://github.com/aws-deadline/deadline-cloud/commit/a3704fd25834168197ca131e75ba826e6499c3f0))
+* Support byte ranges in hash cache for file chunking (#953) ([`35a1802`](https://github.com/aws-deadline/deadline-cloud/commit/35a18026fffa0c1496975b5420a20cec3edca9da))
+
+### Bug Fixes
+
+* Settings dropdown shows configured resource ID instead of '\<none selected\>' when user lacks list permission (#993) ([`d4946d5`](https://github.com/aws-deadline/deadline-cloud/commit/d4946d578568ea26f3ba25285bba9677d844d64c))
+* Job output download failing when filtering active jobs by task run status (#994) ([`34d98eb`](https://github.com/aws-deadline/deadline-cloud/commit/34d98eb2b62e22be210f461277a5a51871bb40d3))
+* Downloaded files with duplicate names failing on Windows when the path exceeds the maximum length (#964) ([`e2ed151`](https://github.com/aws-deadline/deadline-cloud/commit/e2ed15104d7cb57a8244d34bbcb75cb2e0916e42))
+* "Load a different job bundle" button truncated and poorly positioned in the GUI submitter (#980) ([`9f77ba2`](https://github.com/aws-deadline/deadline-cloud/commit/9f77ba29de66e68249b1ea704372e9c25ec0f587)) (#945) ([`3f65662`](https://github.com/aws-deadline/deadline-cloud/commit/3f65662b070535c72557cfcb22bf0afe749152e5))
+* About dialog displays human-readable key names instead of raw YAML keys (#950) ([`d07d075`](https://github.com/aws-deadline/deadline-cloud/commit/d07d075f08df54fdf6b05f0b545a30f2efb03a25))
+* STS and S3 endpoint URL overrides are now respected (#1005) ([`c7df111`](https://github.com/aws-deadline/deadline-cloud/commit/c7df1112dab7969eda65c29c71baac3d93ab4c23))
+
+### Experimental
+
+These changes are experimental and are subject to change.
+
+* MCP Server:
+  * Retrieve session logs by job ID without needing to know the session ID (#996) ([`df91974`](https://github.com/aws-deadline/deadline-cloud/commit/df91974759034f8c9cbad00f30a374ad37885af1))
+  * Add steering prompt and debug hooks for improved diagnostics (#995) ([`33b261d`](https://github.com/aws-deadline/deadline-cloud/commit/33b261d252879a77460448e4a40632e1cbdb9d51))
+
+
 ## 0.54.0 (2025-12-11)
 
 ### DEPRECATIONS

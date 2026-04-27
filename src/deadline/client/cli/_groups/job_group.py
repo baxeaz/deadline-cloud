@@ -21,7 +21,6 @@ import click
 from botocore.exceptions import ClientError
 
 from ...api._session import _modified_logging_level
-from ....job_attachments.download import OutputDownloader
 from ....job_attachments.models import (
     FileConflictResolution,
     JobAttachmentS3Settings,
@@ -35,7 +34,7 @@ from ....job_attachments.progress_tracker import (
     DownloadSummaryStatistics,
     ProgressReportMetadata,
 )
-from ....job_attachments._path_summarization import (
+from ....job_attachments.api import (
     human_readable_file_size,
     summarize_path_list,
 )
@@ -43,11 +42,33 @@ from ....job_attachments._path_summarization import (
 from ... import api
 from ...config import config_file
 from ...exceptions import DeadlineOperationError, DeadlineOperationTimedOut
-from .._common import _apply_cli_options_to_config, _cli_object_repr, _handle_error
+from .._common import (
+    _apply_cli_options_to_config,
+    _cli_object_repr,
+    _handle_error,
+    _suggest_resources_on_client_error,
+)
 from .._main import deadline as main
 from ._sigint_handler import SigIntHandler
 from ...api._session import get_default_client_config
 from .._timestamp_formatter import TimestampFormat, TimestampFormatter
+from ._job_helpers import (
+    _resolve_job_search,
+    _print_job_details,
+    _estimate_remaining_time,
+)
+from ._job_download_helpers import (
+    JSON_MSG_TYPE_PROGRESS,
+    _download_mapped_manifests,
+    _resolve_conflict_resolution,
+    _resolve_storage_profiles,
+    _transform_manifests_to_absolute_paths,
+)
+from ....job_attachments._path_mapping import _generate_path_mapping_rules
+from ....job_attachments.download import (
+    OutputDownloader,
+    get_output_manifests_by_asset_root,
+)
 
 logger = logging.getLogger("deadline.client.cli")
 
@@ -55,7 +76,6 @@ JSON_MSG_TYPE_TITLE = "title"
 JSON_MSG_TYPE_PRESUMMARY = "presummary"
 JSON_MSG_TYPE_PATH = "path"
 JSON_MSG_TYPE_PATHCONFIRM = "pathconfirm"
-JSON_MSG_TYPE_PROGRESS = "progress"
 JSON_MSG_TYPE_SUMMARY = "summary"
 JSON_MSG_TYPE_ERROR = "error"
 JSON_MSG_TYPE_WARNING = "warning"
@@ -100,13 +120,14 @@ sigint_handler = SigIntHandler()
 @_handle_error
 def cli_job():
     """
-    Commands to work with [Deadline Cloud jobs] in a [queue].
+    Monitor and manage Deadline Cloud jobs in a queue.
 
-    Use the `deadline bundle submit` or `deadline bundle gui-submit` commands to create a job
-    from a job bundle.
+    Use `deadline bundle submit` to create a job. Then use these commands
+    to check status, read logs, wait for completion, download output,
+    cancel, or requeue failed tasks.
 
-    [Deadline Cloud jobs]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html
-    [queue]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/queues.html
+    \b
+    Learn more about [Deadline Cloud jobs](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html)
     """
 
 
@@ -119,9 +140,10 @@ def cli_job():
 @_handle_error
 def job_list(page_size, item_offset, **args):
     """
-    Lists the [Deadline Cloud jobs] in the queue.
+    Lists the Deadline Cloud jobs in the queue.
 
-    [Deadline Cloud jobs]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html
+    \b
+    Learn more about [Deadline Cloud jobs](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html)
     """
     # Get a temporary config object with the standard options handled
     config = _apply_cli_options_to_config(required_options={"farm_id", "queue_id"}, **args)
@@ -139,7 +161,12 @@ def job_list(page_size, item_offset, **args):
             sortExpressions=[{"fieldSort": {"name": "CREATED_AT", "sortOrder": "DESCENDING"}}],
         )
     except ClientError as exc:
-        raise DeadlineOperationError(f"Failed to get Jobs from Deadline:\n{exc}") from exc
+        suggestion = _suggest_resources_on_client_error(
+            exc, farm_id=farm_id, queue_id=queue_id, config=config
+        )
+        raise DeadlineOperationError(
+            f"Failed to get Jobs from Deadline:\n{exc}{suggestion}"
+        ) from exc
 
     total_results = response["totalResults"]
 
@@ -147,8 +174,9 @@ def job_list(page_size, item_offset, **args):
     name_field = "displayName"
     if len(response["jobs"]) and "name" in response["jobs"][0]:
         name_field = "name"
-    structured_job_list = [
-        {
+    structured_job_list = []
+    for job in response["jobs"]:
+        job_entry = {
             field: job.get(field, "")
             for field in [
                 name_field,
@@ -160,8 +188,9 @@ def job_list(page_size, item_offset, **args):
                 "createdAt",
             ]
         }
-        for job in response["jobs"]
-    ]
+        est = _estimate_remaining_time(job)
+        job_entry["estimatedTimeRemaining"] = est if est else "N/A"
+        structured_job_list.append(job_entry)
 
     click.echo(
         f"Displaying {len(structured_job_list)} of {total_results} Jobs starting at {item_offset}"
@@ -171,31 +200,43 @@ def job_list(page_size, item_offset, **args):
 
 
 @cli_job.command(name="get")
+@click.argument("search_term", required=False)
 @click.option("--profile", help="The AWS profile to use.")
 @click.option("--farm-id", help="The farm to use.")
 @click.option("--queue-id", help="The queue to use.")
 @click.option("--job-id", help="The job to get.")
 @_handle_error
-def job_get(**args):
+def job_get(search_term: Optional[str], **args):
     """
-    Get the details of a [Deadline Cloud job] in the queue.
+    Get the details of a Deadline Cloud job, or search for jobs with a search term.
 
-    [Deadline Cloud job]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html
+    SEARCH_TERM can be a job ID (job-xxx) or a search string to find matching jobs.
+    If exactly one job matches, shows full details. If multiple match, shows a summary list.
+    If no arguments provided, shows the default job from config.
+
+    \b
+    Learn more about [Deadline Cloud jobs](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html)
     """
-    # Get a temporary config object with the standard options handled
-    config = _apply_cli_options_to_config(
-        required_options={"farm_id", "queue_id", "job_id"}, **args
-    )
+    # Check if search_term is actually a job ID
+    if search_term and re.match(r"^job-[0-9a-f]{32}$", search_term):
+        args["job_id"] = search_term
+        search_term = None
 
-    farm_id = config_file.get_setting("defaults.farm_id", config=config)
-    queue_id = config_file.get_setting("defaults.queue_id", config=config)
-    job_id = config_file.get_setting("defaults.job_id", config=config)
-
-    deadline = api.get_boto3_client("deadline", config=config)
-    response = deadline.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
-    response.pop("ResponseMetadata", None)
-
-    click.echo(_cli_object_repr(response))
+    if search_term:
+        # Search with term - don't require job_id
+        config = _apply_cli_options_to_config(required_options={"farm_id", "queue_id"}, **args)
+        found_job_id = _resolve_job_search(config, search_term)
+        if found_job_id:
+            _print_job_details(config, found_job_id)
+    else:
+        # Get job by ID (from arg or config default)
+        config = _apply_cli_options_to_config(
+            required_options={"farm_id", "queue_id", "job_id"}, **args
+        )
+        job_id = config_file.get_setting("defaults.job_id", config=config)
+        if job_id is None:
+            raise DeadlineOperationError("Missing job ID. Provide a job ID or search term.")
+        _print_job_details(config, job_id)
 
 
 @cli_job.command(name="cancel")
@@ -217,10 +258,11 @@ def job_get(**args):
 @_handle_error
 def job_cancel(mark_as: str, yes: bool, **args):
     """
-    Cancel a [Deadline Cloud job] from running, optionally marking it with an alternative status such
-    as SUSPENDED, SUCCEEDED or FAILED.
+    Cancel a Deadline Cloud job from running, optionally marking it with an
+    alternative status such as SUSPENDED, SUCCEEDED or FAILED.
 
-    [Deadline Cloud job]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html
+    \b
+    Learn more about [Deadline Cloud jobs](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html)
     """
     # Get a temporary config object with the standard options handled
     config = _apply_cli_options_to_config(
@@ -236,7 +278,15 @@ def job_cancel(mark_as: str, yes: bool, **args):
     deadline = api.get_boto3_client("deadline", config=config)
 
     # Print a summary of the job to cancel
-    job = deadline.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
+    try:
+        job = deadline.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
+    except ClientError as exc:
+        suggestion = _suggest_resources_on_client_error(
+            exc, farm_id=farm_id, queue_id=queue_id, config=config
+        )
+        raise DeadlineOperationError(
+            f"Failed to get Job from Deadline:\n{exc}{suggestion}"
+        ) from exc
     # Remove the zero-count status counts
     job["taskRunStatusCounts"] = {
         name: count for name, count in job["taskRunStatusCounts"].items() if count != 0
@@ -291,7 +341,8 @@ def job_cancel(mark_as: str, yes: bool, **args):
 @click.option(
     "--run-status",
     type=click.Choice(
-        ["SUSPENDED", "CANCELED", "FAILED", "SUCCEEDED", "NOT_COMPATIBLE"], case_sensitive=False
+        ["SUSPENDED", "CANCELED", "FAILED", "SUCCEEDED", "NOT_COMPATIBLE"],
+        case_sensitive=False,
     ),
     multiple=True,
     help="Requeue tasks of this status. Repeat the option to provide multiple statuses.",
@@ -304,11 +355,13 @@ def job_cancel(mark_as: str, yes: bool, **args):
 @_handle_error
 def job_requeue_tasks(run_status: Optional[list[str]], **args):
     """
-    Requeue tasks of a [Deadline Cloud job]. By default, requeues all FAILED, CANCELED, and SUSPENDED tasks.
+    Requeue tasks of a Deadline Cloud job. By default, requeues all FAILED,
+    CANCELED, and SUSPENDED tasks.
 
     Use the --run-status option to requeue tasks of different status.
 
-    [Deadline Cloud job]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html
+    \b
+    Learn more about [Deadline Cloud jobs](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html)
     """
     # Get a temporary config object with the standard options handled
     config = _apply_cli_options_to_config(
@@ -445,6 +498,7 @@ def _download_job_output(
     step_id: Optional[str],
     task_id: Optional[str],
     is_json_format: bool = False,
+    ignore_storage_profiles: bool = False,
 ):
     """
     Starts the download of job output and handles the progress reporting callback.
@@ -525,34 +579,84 @@ def _download_job_output(
 
     _check_and_warn_long_output_paths(output_paths_by_root)
 
-    # Check if the asset roots came from different OS. If so, prompt users to
-    # select alternative root paths to download to, (regardless of the auto-accept.)
-    asset_roots = list(output_paths_by_root.keys())
-    for asset_root in asset_roots:
-        root_path_format = root_path_format_mapping.get(asset_root, "")
-        if root_path_format == "":
-            # There must be a corresponding root path format for each root path, by design.
-            raise DeadlineOperationError(f"No root path format found for {asset_root}.")
-        if PathFormat.get_host_path_format_string() != root_path_format:
-            click.echo(_get_mismatch_os_root_warning(asset_root, root_path_format, is_json_format))
+    # Storage profile path mapping (replaces manual OS mismatch prompt when profiles are available)
+    resolved = _resolve_storage_profiles(
+        config, deadline, farm_id, queue_id, job, ignore_storage_profiles
+    )
 
-            if not is_json_format:
-                new_root = click.prompt(
-                    "> Please enter a new root path",
-                    type=click.Path(exists=False),
+    if resolved:
+        # Automatic path mapping via storage profiles using absolute-path transformation.
+        # This matches sync-output behavior: join root + relative, then transform the full
+        # absolute path. This correctly handles nested file system locations where a rule's
+        # source path is deeper than the asset root.
+        rules = _generate_path_mapping_rules(resolved.job_profile, resolved.local_profile)
+        click.echo(f"Using storage profile: {resolved.local_profile.displayName}")
+        if rules:
+            # Fetch manifests directly (same S3 data OutputDownloader uses internally)
+            manifests_by_root = get_output_manifests_by_asset_root(
+                s3_settings=JobAttachmentS3Settings(**queue["jobAttachmentSettings"]),
+                farm_id=farm_id,
+                queue_id=queue_id,
+                job_id=job_id,
+                step_id=step_id,
+                task_id=task_id,
+                session_action_id=session_action_id,
+                session=queue_role_session,
+            )
+            mapped_manifests = _transform_manifests_to_absolute_paths(
+                manifests_by_root, rules, resolved.job_profile.osFamily
+            )
+            if mapped_manifests:
+                download_summary = _download_mapped_manifests(
+                    mapped_manifests=mapped_manifests,
+                    queue=queue,
+                    queue_role_session=queue_role_session,
+                    conflict_resolution_setting=conflict_resolution,
+                    is_json_format=is_json_format,
+                    auto_accept=auto_accept,
                 )
-            else:
-                json_string = click.prompt("", prompt_suffix="", type=str)
-                new_root = _get_value_from_json_line(
-                    json_string, JSON_MSG_TYPE_PATHCONFIRM, expected_size=1
-                )[0]
-                _assert_valid_path(new_root)
+                if download_summary is None:
+                    return
+                click.echo(_get_download_summary_message(download_summary, is_json_format))
+                click.echo()
+                return
+            # If no files could be mapped, fall through to the OutputDownloader path
+            # which will download to original (unmapped) paths.
+        elif resolved.job_profile.storageProfileId != resolved.local_profile.storageProfileId:
+            click.echo(
+                "Warning: No path mapping rules could be generated from the storage profiles. "
+                "Path mapping will be skipped."
+            )
+    else:
+        # No storage profiles — fall back to manual prompt on OS mismatch
+        asset_roots = list(output_paths_by_root.keys())
+        for asset_root in asset_roots:
+            root_path_format = root_path_format_mapping.get(asset_root, "")
+            if root_path_format == "":
+                # There must be a corresponding root path format for each root path, by design.
+                raise DeadlineOperationError(f"No root path format found for {asset_root}.")
+            if PathFormat.get_host_path_format_string() != root_path_format:
+                click.echo(
+                    _get_mismatch_os_root_warning(asset_root, root_path_format, is_json_format)
+                )
 
-            job_output_downloader.set_root_path(asset_root, os.path.expanduser(new_root))
+                if not is_json_format:
+                    new_root = click.prompt(
+                        "> Please enter a new root path",
+                        type=click.Path(exists=False),
+                    )
+                else:
+                    json_string = click.prompt("", prompt_suffix="", type=str)
+                    new_root = _get_value_from_json_line(
+                        json_string, JSON_MSG_TYPE_PATHCONFIRM, expected_size=1
+                    )[0]
+                    _assert_valid_path(new_root)
 
-    output_paths_by_root = job_output_downloader.get_output_paths_by_root()
+                job_output_downloader.set_root_path(asset_root, os.path.expanduser(new_root))
 
-    _check_and_warn_long_output_paths(output_paths_by_root)
+        # Re-fetch after potential set_root_path calls above
+        output_paths_by_root = job_output_downloader.get_output_paths_by_root()
+        _check_and_warn_long_output_paths(output_paths_by_root)
 
     # Prompt users to confirm local root paths where they will download outputs to,
     # and allow users to select different location to download files to if they want.
@@ -619,29 +723,12 @@ def _download_job_output(
         click.echo("\nSummary of file paths to download:")
         click.echo(textwrap.indent(summarize_path_list(all_output_paths), "  "))
 
-    # If the conflict resolution option was not specified, auto-accept is false, and
-    # if there are any conflicting files in local, prompt users to select a resolution method.
-    # (skip, overwrite, or make a copy.)
-    if conflict_resolution != FileConflictResolution.NOT_SELECTED.name:
-        file_conflict_resolution = FileConflictResolution[conflict_resolution]
-    elif auto_accept:
-        file_conflict_resolution = FileConflictResolution.CREATE_COPY
-    else:
-        file_conflict_resolution = FileConflictResolution.CREATE_COPY
-        conflicting_filenames = _get_conflicting_filenames(output_paths_by_root)
-        if conflicting_filenames:
-            click.echo(_get_conflict_resolution_selection_message(conflicting_filenames))
-            user_choice = click.prompt(
-                "> Please enter your choice (1, 2, 3, or n to cancel the download)",
-                type=click.Choice(["1", "2", "3", "n"]),
-                default="3",
-            )
-            if user_choice == "n":
-                click.echo("Output download canceled.")
-                return
-            else:
-                resolution_choice_int = int(user_choice)
-                file_conflict_resolution = FileConflictResolution(resolution_choice_int)
+    # Resolve conflict resolution — shared logic for both mapped and unmapped paths
+    file_conflict_resolution = _resolve_conflict_resolution(
+        conflict_resolution, auto_accept, _get_conflicting_filenames(output_paths_by_root)
+    )
+    if file_conflict_resolution is None:
+        return
 
     # TODO: remove logging level setting when the max number connections for boto3 client
     # in Job Attachments library can be increased (currently using default number, 10, which
@@ -880,6 +967,15 @@ def _assert_valid_path(path: str) -> None:
 @click.option("--step-id", help="The step to use.")
 @click.option("--task-id", help="The task to use.")
 @click.option(
+    "--ignore-storage-profiles",
+    is_flag=True,
+    help="Ignores the storage profile configuration. Only use if the job was "
+    "submitted and downloaded from the same machine. Downloads to "
+    "unmapped paths regardless of operating system.\n"
+    "Default value is False.",
+    default=False,
+)
+@click.option(
     "--conflict-resolution",
     type=click.Choice(
         [
@@ -911,15 +1007,17 @@ def _assert_valid_path(path: str) -> None:
     "parsed/consumed by custom scripts.",
 )
 @_handle_error
-def job_download_output(step_id, task_id, output, **args):
+def job_download_output(step_id, task_id, output, ignore_storage_profiles, **args):
     """
-    Download a the output of a [Deadline Cloud job] in the queue that was saved as [job attachments].
+    Download the output of a Deadline Cloud job that was saved as job
+    attachments.
 
-    [Deadline Cloud job]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html
-    [job attachments]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/storage-job-attachments.html
+    \b
+    Learn more about [job attachments](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/storage-job-attachments.html)
     """
     if task_id and not step_id:
         raise click.UsageError("Missing option '--step-id' required with '--task-id'")
+
     # Get a temporary config object with the standard options handled
     config = _apply_cli_options_to_config(
         required_options={"farm_id", "queue_id", "job_id"}, **args
@@ -931,7 +1029,16 @@ def job_download_output(step_id, task_id, output, **args):
     is_json_format = True if output == "json" else False
 
     try:
-        _download_job_output(config, farm_id, queue_id, job_id, step_id, task_id, is_json_format)
+        _download_job_output(
+            config=config,
+            farm_id=farm_id,
+            queue_id=queue_id,
+            job_id=job_id,
+            step_id=step_id,
+            task_id=task_id,
+            is_json_format=is_json_format,
+            ignore_storage_profiles=ignore_storage_profiles,
+        )
     except Exception as e:
         if is_json_format:
             error_one_liner = str(e).replace("\n", ". ")
@@ -959,14 +1066,15 @@ def job_download_output(step_id, task_id, output, **args):
 @_handle_error
 def job_wait_for_completion(max_poll_interval, timeout, output, **args):
     """
-    Wait for a [Deadline Cloud job] to complete and then print information about failed step-task IDs.
+    Wait for a Deadline Cloud job to complete and then print information
+    about failed step-task IDs.
 
-    This command blocks until the job's taskRunStatus reaches a terminal state
-    (SUCCEEDED, FAILED, CANCELED, SUSPENDED, or NOT_COMPATIBLE),
-    then prints a list of any failed step-task combinations.
+    Blocks until the job reaches a terminal state (SUCCEEDED, FAILED,
+    CANCELED, SUSPENDED, or NOT_COMPATIBLE), then prints any failed
+    step-task combinations.
 
-    The command uses exponential backoff for polling, starting at 0.5 seconds and doubling
-    the interval after each check until it reaches the maximum polling interval.
+    Uses exponential backoff for polling, starting at 0.5s and doubling
+    until reaching --max-poll-interval.
 
     Exit codes:
 
@@ -978,7 +1086,8 @@ def job_wait_for_completion(max_poll_interval, timeout, output, **args):
         4 - Job was suspended
         5 - Job is not compatible
 
-    [Deadline Cloud job]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html
+    \b
+    Learn more about [Deadline Cloud jobs](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/deadline-cloud-jobs.html)
     """
     # Get a temporary config object with the standard options handled
     config = _apply_cli_options_to_config(
@@ -1175,23 +1284,22 @@ def job_logs(
     **args,
 ):
     """
-    Prints a [Deadline Cloud session log] stored in [CloudWatch logs] for the job.
-    Defaults to a recent/ongoing session if a session id is not provided.
+    Print session logs from CloudWatch for a job. Defaults to the most
+    recent or ongoing session if no session ID is provided.
 
-    By default, it returns the most recent 100 log lines, but this can be
-    adjusted using the --limit parameter.
+    Returns the most recent 100 log lines by default (adjust with --limit).
 
-    If session-id is not provided but job-id is, the command will automatically
-    select a session using the following priority:
-    1. If there are ongoing sessions (no endedAt time), always prefer them
-    2. Among ongoing sessions, select the one that started most recently
-    3. If no ongoing sessions exist, select the completed session that ended most recently
+    Session auto-selection priority when --session-id is omitted:
 
-    Use --next-token with the value from a previous response to get the next page of results
-    of log output prior to the last page.
+    \b
+      1. Ongoing sessions (no endedAt), preferring most recently started
+      2. Most recently ended completed session
 
-    [Deadline Cloud session log]: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/view-logs.html
-    [CloudWatch logs]: https://docs.aws.amazon.com/deadline-cloud/latest/developerguide/monitoring-cloudwatch.html
+    Use --next-token with the value from a previous response to get the
+    next page of log output.
+
+    \b
+    Learn more about [session logs](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/view-logs.html)
     """
     # Get a temporary config object with the standard options handled
     config = _apply_cli_options_to_config(required_options={"farm_id", "queue_id"}, **args)
@@ -1278,7 +1386,8 @@ def job_logs(
                     latest_session = max(
                         ongoing_sessions,
                         key=lambda s: s.get(
-                            "startedAt", datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+                            "startedAt",
+                            datetime.datetime.min.replace(tzinfo=datetime.timezone.utc),
                         ),
                     )
                 else:
@@ -1286,7 +1395,8 @@ def job_logs(
                     latest_session = max(
                         completed_sessions,
                         key=lambda s: s.get(
-                            "endedAt", datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+                            "endedAt",
+                            datetime.datetime.min.replace(tzinfo=datetime.timezone.utc),
                         ),
                     )
 
@@ -1486,325 +1596,8 @@ def job_logs(
             raise DeadlineOperationError(f"Error retrieving logs: {e}")
 
 
-@cli_job.command(name="trace-schedule")
-@click.option("--profile", help="The AWS profile to use.")
-@click.option("--farm-id", help="The farm to use.")
-@click.option("--queue-id", help="The queue to use.")
-@click.option("--job-id", help="The job to trace.")
-@click.option("-v", "--verbose", is_flag=True, help="Output verbose trace details.")
-@click.option(
-    "--trace-format",
-    type=click.Choice(
-        ["chrome"],
-        case_sensitive=False,
-    ),
-    help="The tracing format to write.",
-)
-@click.option("--trace-file", help="The tracing file to write.")
-@_handle_error
-def job_trace_schedule(verbose, trace_format, trace_file, **args):
-    """
-    EXPERIMENTAL - Generate statistics from a job with a trace that you can view and explore interactively.
+# The 'trace-schedule' command lives in _trace_schedule.py to keep this file
+# focused. Register it with the 'cli_job' group here.
+from ._trace_schedule import cli_job_trace_schedule  # noqa: E402
 
-    To visualize the trace output file when providing the options
-    "--trace-format chrome --trace-file output.json", open
-    the [Perfetto Tracing UI] in a browser and choose "Open trace file".
-
-    [Perfetto Tracing UI]: https://ui.perfetto.dev
-    """
-    # Get a temporary config object with the standard options handled
-    config = _apply_cli_options_to_config(
-        required_options={"farm_id", "queue_id", "job_id"}, **args
-    )
-
-    farm_id = config_file.get_setting("defaults.farm_id", config=config)
-    queue_id = config_file.get_setting("defaults.queue_id", config=config)
-    job_id = config_file.get_setting("defaults.job_id", config=config)
-
-    if trace_file and not trace_format:
-        raise DeadlineOperationError("Error: Must provide --trace-format with --trace-file.")
-
-    deadline = api.get_boto3_client("deadline", config=config)
-    trace_end_utc = datetime.datetime.now(datetime.timezone.utc)
-
-    click.echo("Getting the job...")
-    job = deadline.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
-    job.pop("ResponseMetadata", None)
-
-    if "startedAt" not in job:
-        raise DeadlineOperationError("No trace available - Job hasn't started yet, exiting")
-    started_at = job["startedAt"]
-
-    click.echo("Getting all the sessions for the job...")
-    response = deadline.list_sessions(farmId=farm_id, queueId=queue_id, jobId=job_id)
-    while "nextToken" in response:
-        old_list = response["sessions"]
-        response = deadline.list_sessions(
-            farmId=farm_id,
-            queueId=queue_id,
-            jobId=job_id,
-            nextToken=response["nextToken"],
-        )
-        response["sessions"] = old_list + response["sessions"]
-    response.pop("ResponseMetadata", None)
-
-    sessions = sorted(response["sessions"], key=lambda session: session["startedAt"])
-
-    click.echo("Getting all the session actions for the job...")
-    for session in sessions:
-        response = deadline.list_session_actions(
-            farmId=farm_id,
-            queueId=queue_id,
-            jobId=job_id,
-            sessionId=session["sessionId"],
-        )
-        while "nextToken" in response:
-            old_list = response["sessionActions"]
-            response = deadline.list_session_actions(
-                farmId=farm_id,
-                queueId=queue_id,
-                jobId=job_id,
-                sessionId=session["sessionId"],
-                nextToken=response["nextToken"],
-            )
-            response["sessionActions"] = old_list + response["sessionActions"]
-        response.pop("ResponseMetadata", None)
-
-        session["actions"] = response["sessionActions"]
-
-    # Cache steps and tasks by their id, to only get each once
-    steps: dict[str, Any] = {}
-    tasks: dict[str, Any] = {}
-
-    with click.progressbar(  # type: ignore[var-annotated]
-        length=len(sessions), label="Getting all the steps and tasks for the job..."
-    ) as progressbar:
-        for index, session in enumerate(sessions):
-            session["index"] = index
-            for action in session["actions"]:
-                step_id = action["definition"].get("taskRun", {}).get("stepId")
-                task_id = action["definition"].get("taskRun", {}).get("taskId")
-                if step_id and task_id:
-                    if "step" not in session:
-                        if step_id in steps:
-                            step = steps[step_id]
-                        else:
-                            step = deadline.get_step(
-                                farmId=farm_id,
-                                queueId=queue_id,
-                                jobId=job_id,
-                                stepId=step_id,
-                            )
-                            step.pop("ResponseMetadata", None)
-                            steps[step_id] = step
-                        session["step"] = step
-                    elif session["step"]["stepId"] != step_id:
-                        # The session itself doesn't have a step id, but for now the scheduler always creates new
-                        # sessions for new steps.
-                        raise DeadlineOperationError(
-                            f"Session {session['sessionId']} ran more than one step! When this code was"
-                            " written that wasn't possible."
-                        )
-
-                    if task_id in tasks:
-                        task = tasks[task_id]
-                    else:
-                        task = deadline.get_task(
-                            farmId=farm_id,
-                            queueId=queue_id,
-                            jobId=job_id,
-                            stepId=step_id,
-                            taskId=task_id,
-                        )
-                        task.pop("ResponseMetadata", None)
-                        tasks[task_id] = task
-                    action["task"] = task
-            progressbar.update(1)
-
-    # Collect the worker IDs that ran the sessions, and give them indexes to act as PIDs in the tracing file
-    worker_ids = {session["workerId"] for session in sessions}
-    workers = {worker_id: index for index, worker_id in enumerate(worker_ids)}
-
-    click.echo("Processing the trace data...")
-    trace_events = []
-
-    def time_int(timestamp: datetime.datetime):
-        return int((timestamp - started_at) / datetime.timedelta(microseconds=1))
-
-    def duration_of(resource):
-        try:
-            return time_int(resource.get("endedAt", trace_end_utc)) - time_int(
-                resource["startedAt"]
-            )
-        except KeyError:
-            return 0
-
-    accumulators = {
-        "sessionCount": 0,
-        "sessionActionCount": 0,
-        "taskRunCount": 0,
-        "envActionCount": 0,
-        "syncJobAttachmentsCount": 0,
-        "sessionDuration": 0,
-        "sessionActionDuration": 0,
-        "taskRunDuration": 0,
-        "envActionDuration": 0,
-        "syncJobAttachmentsDuration": 0,
-    }
-
-    for session in sessions:
-        accumulators["sessionCount"] += 1
-        accumulators["sessionDuration"] += duration_of(session)
-
-        pid = workers[session["workerId"]]
-        session_event_name = f"{session['step']['name']} - {session['index']}"
-        if "endedAt" not in session:
-            session_event_name = f"{session_event_name} - In Progress"
-        trace_events.append(
-            {
-                "name": session_event_name,
-                "cat": "SESSION",
-                "ph": "B",  # Begin Event
-                "ts": time_int(session["startedAt"]),
-                "pid": pid,
-                "tid": 0,
-                "args": {
-                    "sessionId": session["sessionId"],
-                    "workerId": session["workerId"],
-                    "fleetId": session["fleetId"],
-                    "lifecycleStatus": session["lifecycleStatus"],
-                },
-            }
-        )
-
-        for action in session["actions"]:
-            accumulators["sessionActionCount"] += 1
-            accumulators["sessionActionDuration"] += duration_of(action)
-
-            name = action["sessionActionId"]
-            action_type = list(action["definition"].keys())[0]
-            if action_type == "taskRun":
-                accumulators["taskRunCount"] += 1
-                accumulators["taskRunDuration"] += duration_of(action)
-
-                task = action["task"]
-                parameters = task.get("parameters", {})
-                name = ",".join(
-                    f"{param}={list(parameters[param].values())[0]}" for param in parameters
-                )
-                if not name:
-                    name = "<No Task Params>"
-            elif action_type in ("envEnter", "envExit"):
-                accumulators["envActionCount"] += 1
-                accumulators["envActionDuration"] += duration_of(action)
-
-                name = action["definition"][action_type]["environmentId"].split(":")[-1]
-            elif action_type == "syncInputJobAttachments":
-                accumulators["syncJobAttachmentsCount"] += 1
-                accumulators["syncJobAttachmentsDuration"] += duration_of(action)
-
-                if "stepId" in action["definition"][action_type]:
-                    name = "Sync Job Attchmnt (Dependencies)"
-                else:
-                    name = "Sync Job Attchmnt (Submitted)"
-            if "endedAt" not in action:
-                name = f"{name} - In Progress"
-            if "startedAt" in action:
-                trace_events.append(
-                    {
-                        "name": name,
-                        "cat": action_type,
-                        "ph": "X",  # Complete Event
-                        "ts": time_int(action["startedAt"]),
-                        "dur": duration_of(action),
-                        "pid": pid,
-                        "tid": 0,
-                        "args": {
-                            "sessionActionId": action["sessionActionId"],
-                            "status": action["status"],
-                            "stepName": session["step"]["name"],
-                        },
-                    }
-                )
-
-        trace_events.append(
-            {
-                "name": session_event_name,
-                "cat": "SESSION",
-                "ph": "E",  # End Event
-                "ts": time_int(session.get("endedAt", trace_end_utc)),
-                "pid": pid,
-                "tid": 0,
-            }
-        )
-
-    if verbose:
-        click.echo(" ==== TRACE DATA ====")
-        click.echo(_cli_object_repr(job))
-        click.echo("")
-        click.echo(_cli_object_repr(sessions))
-
-    click.echo("")
-    click.echo(" ==== SUMMARY ====")
-    click.echo("")
-    click.echo(f"Session Count: {accumulators['sessionCount']}")
-    session_total_duration = accumulators["sessionDuration"]
-    click.echo(f"Session Total Duration: {datetime.timedelta(microseconds=session_total_duration)}")
-    click.echo(f"Session Action Count: {accumulators['sessionActionCount']}")
-    click.echo(
-        f"Session Action Total Duration: {datetime.timedelta(microseconds=accumulators['sessionActionDuration'])}"
-    )
-    click.echo(f"Task Run Count: {accumulators['taskRunCount']}")
-    task_run_total_duration = accumulators["taskRunDuration"]
-    click.echo(
-        f"Task Run Total Duration: {datetime.timedelta(microseconds=task_run_total_duration)} ({100 * task_run_total_duration / session_total_duration:.1f}%)"
-    )
-    click.echo(
-        f"Non-Task Run Count: {accumulators['sessionActionCount'] - accumulators['taskRunCount']}"
-    )
-    non_task_run_total_duration = (
-        accumulators["sessionActionDuration"] - accumulators["taskRunDuration"]
-    )
-    click.echo(
-        f"Non-Task Run Total Duration: {datetime.timedelta(microseconds=non_task_run_total_duration)} ({100 * non_task_run_total_duration / session_total_duration:.1f}%)"
-    )
-    click.echo(f"Sync Job Attachments Count: {accumulators['syncJobAttachmentsCount']}")
-    sync_job_attachments_total_duration = accumulators["syncJobAttachmentsDuration"]
-    click.echo(
-        f"Sync Job Attachments Total Duration: {datetime.timedelta(microseconds=sync_job_attachments_total_duration)} ({100 * sync_job_attachments_total_duration / session_total_duration:.1f}%)"
-    )
-    click.echo(f"Env Action Count: {accumulators['envActionCount']}")
-    env_action_total_duration = accumulators["envActionDuration"]
-    click.echo(
-        f"Env Action Total Duration: {datetime.timedelta(microseconds=env_action_total_duration)} ({100 * env_action_total_duration / session_total_duration:.1f}%)"
-    )
-    click.echo("")
-    within_session_overhead_duration = (
-        accumulators["sessionDuration"] - accumulators["sessionActionDuration"]
-    )
-    click.echo(
-        f"Within-session Overhead Duration: {datetime.timedelta(microseconds=within_session_overhead_duration)} ({100 * within_session_overhead_duration / session_total_duration:.1f}%)"
-    )
-    click.echo(
-        f"Within-session Overhead Duration Per Action: {datetime.timedelta(microseconds=(accumulators['sessionDuration'] - accumulators['sessionActionDuration']) / accumulators['sessionActionCount'])}"
-    )
-
-    tracing_data: dict[str, Any] = {
-        "traceEvents": trace_events,
-        # "displayTimeUnits": "s",
-        "otherData": {
-            "farmId": farm_id,
-            "queueId": queue_id,
-            "jobId": job_id,
-            "jobName": job["name"],
-            "startedAt": job["startedAt"].isoformat(sep="T"),
-        },
-    }
-    if "endedAt" in job:
-        tracing_data["otherData"]["endedAt"] = job["endedAt"].isoformat(sep="T")
-
-    tracing_data["otherData"].update(accumulators)
-
-    if trace_file:
-        with open(trace_file, "w", encoding="utf8") as f:
-            json.dump(tracing_data, f, indent=1)
+cli_job.add_command(cli_job_trace_schedule)

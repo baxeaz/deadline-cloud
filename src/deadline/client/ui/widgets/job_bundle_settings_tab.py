@@ -11,15 +11,10 @@ from logging import getLogger
 from typing import Any, Optional
 
 from qtpy.QtCore import Signal  # type: ignore
-from .._utils import tr
 from qtpy.QtWidgets import (  # type: ignore
     QVBoxLayout,
-    QHBoxLayout,
     QWidget,
     QFileDialog,
-    QPushButton,
-    QSpacerItem,
-    QSizePolicy,
     QMessageBox,
 )
 
@@ -51,8 +46,6 @@ class JobBundleSettingsWidget(QWidget):
     def __init__(self, initial_settings: JobBundleSettings, parent: Optional[QWidget] = None):
         super().__init__(parent=parent)
 
-        self.parent = parent
-
         self.param_layout = QVBoxLayout()
 
         self._build_ui(initial_settings)
@@ -62,14 +55,6 @@ class JobBundleSettingsWidget(QWidget):
 
         layout = QVBoxLayout(self)
 
-        if initial_settings.browse_enabled:
-            btnBox = QHBoxLayout()
-            self.load_bundle_button = QPushButton(tr("Load a different job bundle"))
-            self.load_bundle_button.clicked.connect(self.on_load_bundle)
-            btnBox.addWidget(self.load_bundle_button)
-            btnBox.addItem(QSpacerItem(0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum))
-            layout.addLayout(btnBox)
-
         layout.addLayout(self.param_layout)
         self.refresh_ui(initial_settings)
 
@@ -77,7 +62,11 @@ class JobBundleSettingsWidget(QWidget):
         # Clear the layout
         for i in reversed(range(self.param_layout.count())):
             item = self.param_layout.takeAt(i)
-            item.widget().deleteLater()
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
 
         self.parameters_widget = OpenJDParametersWidget(
             parameter_definitions=settings.parameters, parent=self
@@ -113,11 +102,7 @@ class JobBundleSettingsWidget(QWidget):
 
             # Load the template to get the bundle name
             template = read_yaml_or_json_object(input_job_bundle_dir, "template", True)
-            name = (
-                template.get("name", "Job bundle submission")
-                if template
-                else "Job bundle submission"
-            )
+            name = template.get("name", "Job bundle submission")  # type: ignore[union-attr]
             job_settings = JobBundleSettings(input_job_bundle_dir=input_job_bundle_dir, name=name)
             job_settings.parameters = read_job_bundle_parameters(input_job_bundle_dir)
 
@@ -127,8 +112,9 @@ class JobBundleSettingsWidget(QWidget):
             logger.warning(msg)
             return
 
-        if self.parent and hasattr(self.parent, "refresh"):
-            self.parent.refresh(
+        dialog = self.window()
+        if dialog is not None and hasattr(dialog, "refresh"):
+            dialog.refresh(  # type: ignore[union-attr]
                 job_settings=job_settings,
                 auto_detected_attachments=asset_references,
                 attachments=None,

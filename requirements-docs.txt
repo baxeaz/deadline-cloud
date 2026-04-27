@@ -1,7 +1,9 @@
-mkdocs >= 1.5.0
-mkdocs-material >= 9.4.0
-mkdocs-section-index >= 0.3.10
+mkdocs >= 1.6.1
+mkdocs-material >= 9.7.6
+mkdocs-section-index >= 0.3.11
 mkdocstrings[python]
 mkdocs-click
+# griffe version will match whichever griffelib mkdocstrings uses
+griffe
 # MCP (Model Context Protocol) library for MCP CLI command
 mcp >= 1.13.0; python_version >= '3.10'
